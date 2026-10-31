@@ -169,8 +169,7 @@ pub(super) fn worker_loop(rx: mpsc::Receiver<BridgeCmd>, tx: mpsc::Sender<Bridge
 
             BridgeCmd::LoadClub(addr, index) => {
                 if let Some(f) = &fm {
-                    let clubs_slice = cache.as_deref().map(|c| c.clubs.as_slice());
-                    match entity_load::load_club_view(f, addr, index, clubs_slice) {
+                    match entity_load::load_club_view(f, addr, index) {
                         Ok(v) => {
                             let _ = tx.send(BridgeResult::ClubLoaded(v));
                         }

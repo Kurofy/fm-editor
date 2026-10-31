@@ -83,7 +83,6 @@ pub(super) fn load_club_view(
     fm: &FmProcess,
     addr: u64,
     index: usize,
-    cached_clubs: Option<&[crate::cache::CachedClub]>,
 ) -> Result<ClubView, String> {
     let schema = fm.schemas();
     let raw = fm.read_bytes(addr, schema.club_read_size)?;
@@ -167,7 +166,7 @@ pub(super) fn load_club_view(
     let stadium_name = stadium_string("st_name");
     let stadium_name2 = stadium_string("st_name2");
 
-    let affiliations = load_club_affiliations(fm, addr, uid, &full_name, info_addr, cached_clubs);
+    let affiliations = load_club_affiliations(fm, addr, uid, &full_name, info_addr);
 
     Ok(ClubView {
         addr,
@@ -211,7 +210,6 @@ fn load_club_affiliations(
     club_uid: u32,
     club_name: &str,
     info_addr: Option<u64>,
-    cached_clubs: Option<&[crate::cache::CachedClub]>,
 ) -> Vec<crate::affiliation::AffiliationView> {
     use crate::affiliation::{AffiliationType, AffiliationView, FriendshipBenefits};
     use std::collections::HashSet;
@@ -225,19 +223,7 @@ fn load_club_affiliations(
         if !(ptr > 0x10000 && ptr < 0x7FFFFFFFFFFF) {
             return None;
         }
-        // Check cached_clubs first
-        if let Some(list) = cached_clubs {
-            if let Some(c) = list.iter().find(|c| c.addr == ptr || c.senior_team_addr == Some(ptr)) {
-                return Some((c.name.clone(), c.uid, c.addr));
-            }
-            // Check if team+0x30 points to club
-            if let Ok(cptr) = fm.read_u64(ptr + 0x30) {
-                if let Some(c) = list.iter().find(|c| c.addr == cptr) {
-                    return Some((c.name.clone(), c.uid, c.addr));
-                }
-            }
-        }
-        // Fallback: direct memory read of name
+        // Direct memory read of club: UID at +0x0C, name at +0xC0 or +0xC8
         if let Ok(uid) = fm.read_u32(ptr + 0x0C) {
             let np_res = fm.read_u64(ptr + 0xC0).or_else(|_| fm.read_u64(ptr + 0xC8));
             if let Ok(name_ptr) = np_res {
