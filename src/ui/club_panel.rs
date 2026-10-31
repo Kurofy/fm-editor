@@ -1209,6 +1209,7 @@ mod tests {
             senior_team_addr: None,
             budget_raw: Some(vec![0; 0x20]),
             budget_addr: Some(0x3000),
+            nickname: None,
             stadium_entity_raw: None,
             stadium_name: None,
             stadium_name2: None,
