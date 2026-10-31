@@ -2164,7 +2164,6 @@ fn show_contract(
         });
     });
 }
-}
 
 /// Squad statuses offered for editing: one code per distinct label. Codes
 /// 6, 8, 19 and 21 duplicate a label; 0 ("-"), 23 (Scouting Required) and
