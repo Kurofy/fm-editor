@@ -725,6 +725,9 @@ impl eframe::App for FmEditorApp {
 
         // Publish active theme into egui temp data so widget code can read it
         // without needing an explicit parameter (used by value_color in field_widget).
+        // Also enforce the configured theme's visuals so eframe/winit system-theme
+        // events after `CreationContext` cannot revert the user's saved theme.
+        ctx.set_visuals(self.settings.theme.visuals());
         ctx.data_mut(|d| d.insert_temp(theme_data_id(), self.settings.theme));
         navigation::set_result_keyboard_enabled(
             ctx,

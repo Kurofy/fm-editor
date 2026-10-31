@@ -257,6 +257,8 @@ static FM26_KEYS: LazyLock<HashMap<&'static str, &'static Field>> =
     LazyLock::new(|| key_map(&fm26::FM26));
 static FM24_KEYS: LazyLock<HashMap<&'static str, &'static Field>> =
     LazyLock::new(|| key_map(&fm24::FM24));
+static FM24_EPIC_KEYS: LazyLock<HashMap<&'static str, &'static Field>> =
+    LazyLock::new(|| key_map(&fm24::FM24_EPIC));
 static FM27_KEYS: LazyLock<HashMap<&'static str, &'static Field>> =
     LazyLock::new(|| key_map(&fm27::FM27));
 static FM27_GAMEPASS_KEYS: LazyLock<HashMap<&'static str, &'static Field>> =
@@ -534,6 +536,8 @@ impl VersionedSchemas {
             &*FM26_KEYS
         } else if std::ptr::eq(self, &fm24::FM24) {
             &*FM24_KEYS
+        } else if std::ptr::eq(self, &fm24::FM24_EPIC) {
+            &*FM24_EPIC_KEYS
         } else if std::ptr::eq(self, &fm27::FM27) {
             &*FM27_KEYS
         } else if std::ptr::eq(self, &fm27::FM27_GAMEPASS) {

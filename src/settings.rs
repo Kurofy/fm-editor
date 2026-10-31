@@ -170,8 +170,36 @@ fn settings_path() -> Option<std::path::PathBuf> {
 
 // ─── Egui data key ────────────────────────────────────────────────────────────
 
-/// Key used to store the active `Theme` in egui's per-frame temp data so
+///Key used to store the active `Theme` in egui's per-frame temp data so
 /// widget code can read it without needing an explicit parameter.
 pub fn theme_data_id() -> egui::Id {
     egui::Id::new("fm_active_theme")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_visuals_override_system_theme_on_every_frame() {
+        let ctx = egui::Context::default();
+        for theme in [Theme::Dark, Theme::Light, Theme::DarkBlue] {
+            ctx.set_visuals(egui::Visuals::light());
+            ctx.set_visuals(theme.visuals());
+            assert_eq!(ctx.style().visuals.window_fill, theme.visuals().window_fill);
+        }
+    }
+
+    #[test]
+    fn settings_round_trip_preserves_theme() {
+        for theme in [Theme::Dark, Theme::Light, Theme::DarkBlue] {
+            let s = AppSettings {
+                theme,
+                ..AppSettings::default()
+            };
+            let json = serde_json::to_string(&s).unwrap();
+            let loaded: AppSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(loaded.theme, theme);
+        }
+    }
 }

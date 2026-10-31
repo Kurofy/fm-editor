@@ -61,14 +61,16 @@ impl GameVersion {
     }
 }
 
-/// Where a game install came from. Anything not recognised as Game Pass is
-/// treated as the Steam build, which is what every schema was mapped
-/// against (on Windows and under Proton).
+/// Where a game install came from. Anything not recognised as Game Pass or
+/// Epic Games Store is treated as the Steam build, which is what every
+/// schema was mapped against (on Windows and under Proton).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Storefront {
     Steam,
     /// PC Game Pass / Microsoft Store (Xbox app) install.
     GamePass,
+    /// Epic Games Store install.
+    Epic,
 }
 
 impl Storefront {
@@ -77,6 +79,7 @@ impl Storefront {
         match self {
             Storefront::Steam => "Steam",
             Storefront::GamePass => "Game Pass",
+            Storefront::Epic => "Epic",
         }
     }
 }
@@ -87,6 +90,9 @@ impl Storefront {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GameBuild {
     Fm24Steam,
+    /// Starts as a copy of the FM24 Steam schema; unverified against the
+    /// Epic Games Store binary (see docs/fm24).
+    Fm24Epic,
     Fm26Steam,
     Fm27Steam,
     /// Starts as a copy of the FM27 Steam schema; nothing in it has been
@@ -96,8 +102,9 @@ pub enum GameBuild {
 
 impl GameBuild {
     /// Every build with a schema.
-    pub const ALL: [GameBuild; 4] = [
+    pub const ALL: [GameBuild; 5] = [
         GameBuild::Fm24Steam,
+        GameBuild::Fm24Epic,
         GameBuild::Fm26Steam,
         GameBuild::Fm27Steam,
         GameBuild::Fm27GamePass,
@@ -121,7 +128,7 @@ impl GameBuild {
 
     pub fn version(self) -> GameVersion {
         match self {
-            GameBuild::Fm24Steam => GameVersion::Fm24,
+            GameBuild::Fm24Steam | GameBuild::Fm24Epic => GameVersion::Fm24,
             GameBuild::Fm26Steam => GameVersion::Fm26,
             GameBuild::Fm27Steam | GameBuild::Fm27GamePass => GameVersion::Fm27,
         }
@@ -132,6 +139,7 @@ impl GameBuild {
             GameBuild::Fm24Steam | GameBuild::Fm26Steam | GameBuild::Fm27Steam => {
                 Storefront::Steam
             }
+            GameBuild::Fm24Epic => Storefront::Epic,
             GameBuild::Fm27GamePass => Storefront::GamePass,
         }
     }
@@ -140,6 +148,7 @@ impl GameBuild {
     pub fn schemas(self) -> &'static VersionedSchemas {
         match self {
             GameBuild::Fm24Steam => &fm24::FM24,
+            GameBuild::Fm24Epic => &fm24::FM24_EPIC,
             GameBuild::Fm26Steam => &fm26::FM26,
             GameBuild::Fm27Steam => &fm27::FM27,
             GameBuild::Fm27GamePass => &fm27::FM27_GAMEPASS,
@@ -151,6 +160,7 @@ impl GameBuild {
     pub fn schema_name(self) -> &'static str {
         match self {
             GameBuild::Fm24Steam => "FM24",
+            GameBuild::Fm24Epic => "FM24_EPIC",
             GameBuild::Fm26Steam => "FM26",
             GameBuild::Fm27Steam => "FM27",
             GameBuild::Fm27GamePass => "FM27_GAMEPASS",
@@ -162,6 +172,7 @@ impl GameBuild {
     /// storefronts are named ("FM27 Game Pass").
     pub fn display_name(self) -> &'static str {
         match self {
+            GameBuild::Fm24Epic => "FM24 Epic",
             GameBuild::Fm27GamePass => "FM27 Game Pass",
             other => other.version().display_name(),
         }

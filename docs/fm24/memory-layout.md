@@ -142,3 +142,24 @@ r=0.89, DL/WBL r=0.82, attribute bytes ≤ 100, max(left, right foot) = 20 for a
 Player: value, morale and condition (leads above), traits, apps/goals, dates
 (transfer/join/debut/listing), secondary name block, contract clauses and listing. Staff: the
 seven attributes above. Club and stadium: see above.
+
+## Epic Games Store build
+
+The Epic Games Store release of FM24 (`24.4.2+2081827`, shipped with
+`EOSSDK-Win64-Shipping.dll`, `epic.txt` and `.egstore`) is a separate binary
+from the Steam build (`fm.exe` header hash `0x8FA113DB9DCD8883` vs Steam's
+`0xFB39952A20287907`) and often installs under a spaceless directory name
+such as `FootballManager24`.
+
+It has its own schema, `FM24_EPIC` in `src/fields/fm24/mod.rs`, selected when
+the install is recognised as Epic (`.egstore`, `epic.txt` or
+`EOSSDK-Win64-Shipping.dll` next to `fm.exe`, or an `Epic Games` / `epic`
+install path). Version sniffing also matches `FootballManager24` without a
+space.
+
+**Nothing in `FM24_EPIC` is verified yet.** It starts as a copy of the Steam
+schema (`STEAM`) with `known_dll_hash: 0`, allowing the editor to attach and
+surface the module hash notice instead of failing the Steam fingerprint gate.
+As with `FM27_GAMEPASS`, module-relative RVAs in `.xtls` (`0x06264000..0x0643D000`)
+and struct offsets must be confirmed against a live Epic FM24 save before
+setting `known_dll_hash`.

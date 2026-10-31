@@ -20,7 +20,7 @@ pub(crate) use stadium::FIELDS as STADIUM_FIELDS;
 
 use crate::fields::VersionedSchemas;
 
-/// FM24 schema — mapped 2026-10-22 against a fresh save (3 Jul 2023).
+/// FM24 Steam schema — mapped 2026-10-22 against a fresh save (3 Jul 2023).
 ///
 /// RVAs are relative to the fm.exe base. Each `(data, end)` pair is a
 /// std::vector of object pointers in fm.exe's writable data:
@@ -35,7 +35,7 @@ use crate::fields::VersionedSchemas;
 ///
 /// The stadium array root is not located; stadiums are reached per club via
 /// the `home_stadium` sub-record, so `rva_stadium_base` stays 0.
-pub static FM24: VersionedSchemas = VersionedSchemas {
+const STEAM: VersionedSchemas = VersionedSchemas {
     player_fields: PLAYER_FIELDS,
     staff_fields: STAFF_FIELDS,
     club_fields: CLUB_FIELDS,
@@ -77,4 +77,18 @@ pub static FM24: VersionedSchemas = VersionedSchemas {
     player_coach_shift: 0,
     human_manager_vtable_rva: 0,
     age_reference_year: 2023,
+};
+
+/// FM24 schema, Steam build (Windows and Proton).
+pub static FM24: VersionedSchemas = STEAM;
+
+/// FM24 schema, Epic Games Store build.
+///
+/// UNVERIFIED: starts as a copy of the Steam schema with `known_dll_hash` 0 so
+/// the Epic binary (e.g. 24.4.2+2081827, header hash `0x8FA113DB9DCD8883`) can
+/// attach instead of being rejected by the Steam fingerprint gate. See
+/// docs/fm24/memory-layout.md ("Epic Games Store build").
+pub static FM24_EPIC: VersionedSchemas = VersionedSchemas {
+    known_dll_hash: 0,
+    ..STEAM
 };
