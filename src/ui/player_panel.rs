@@ -1928,7 +1928,7 @@ fn show_contract(
                                             let current_wage = match wage_period {
                                                 WagePeriod::Weekly => currency.from_gbp(old_wage_gbp),
                                                 WagePeriod::Monthly => currency.from_gbp(old_wage_gbp * 52 / 12),
-                                                WagePeriod::Annual => currency.from_gbp(old_wage_gbp * 52),
+                                                WagePeriod::Yearly => currency.from_gbp(old_wage_gbp * 52),
                                             };
                                             current_wage.to_string()
                                         });
@@ -1945,7 +1945,7 @@ fn show_contract(
                                             let wage_gbp = match wage_period {
                                                 WagePeriod::Weekly => currency.to_gbp(parsed),
                                                 WagePeriod::Monthly => currency.to_gbp(parsed * 12 / 52),
-                                                WagePeriod::Annual => currency.to_gbp(parsed / 52),
+                                                WagePeriod::Yearly => currency.to_gbp(parsed / 52),
                                             };
                                             apply_wage = Some(wage_gbp.clamp(0, u32::MAX as i64) as u32);
                                         }
@@ -1955,7 +1955,7 @@ fn show_contract(
                                             let wage_gbp = match wage_period {
                                                 WagePeriod::Weekly => currency.to_gbp(parsed),
                                                 WagePeriod::Monthly => currency.to_gbp(parsed * 12 / 52),
-                                                WagePeriod::Annual => currency.to_gbp(parsed / 52),
+                                                WagePeriod::Yearly => currency.to_gbp(parsed / 52),
                                             };
                                             apply_wage = Some(wage_gbp.clamp(0, u32::MAX as i64) as u32);
                                         }
@@ -2055,9 +2055,9 @@ fn show_contract(
                 if let Some(off) = schemas.offset_of("p_list_flags") {
                     if let Some(&flags) = cr.get(off) {
                         ui.add_space(8.0);
-                        egui::Frame::none()
+                        egui::Frame::default()
                             .fill(ui.visuals().faint_bg_color)
-                            .rounding(4.0)
+                            .corner_radius(4.0)
                             .inner_margin(8.0)
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
@@ -2142,7 +2142,7 @@ fn show_contract(
                                         });
                                     }
                                     if ui.add_enabled(enabled, egui::Button::new("Expire 2024")).clicked() {
-                                        let new_year = 2024;
+                                        let new_year: u16 = 2024;
                                         let mut new_bytes = [0u8; 4];
                                         new_bytes[0..2].copy_from_slice(&doy.to_le_bytes());
                                         new_bytes[2..4].copy_from_slice(&new_year.to_le_bytes());
