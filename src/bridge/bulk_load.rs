@@ -136,7 +136,13 @@ pub(super) fn load_entity_cache(
             if off + 8 <= raw.len() {
                 let nat_ptr = read_u64_le(&raw, off);
                 if nat_ptr > 0x10000 && nat_ptr < 0x7FFFFFFFFFFF && !nations_map.contains_key(&nat_ptr) {
-                    if let Ok(name) = fm.read_fm_name(nat_ptr + 0x18) {
+                    let name_opt = if let Ok(name_ptr) = fm.read_u64(nat_ptr + 0x18) {
+                        fm.read_fm_name(name_ptr).ok()
+                    } else {
+                        None
+                    }.or_else(|| fm.read_fm_name(nat_ptr + 0x18).ok());
+
+                    if let Some(name) = name_opt {
                         let trimmed = name.trim().to_string();
                         if !trimmed.is_empty() {
                             nations_map.insert(nat_ptr, trimmed);

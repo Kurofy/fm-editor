@@ -15,6 +15,23 @@ pub enum PlayerTab {
     Contract,
 }
 
+const DEFAULT_NATIONS: &[&str] = &[
+    "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Argentina", "Armenia", "Australia",
+    "Austria", "Azerbaijan", "Bahrain", "Bangladesh", "Belarus", "Belgium", "Bolivia",
+    "Bosnia & Herzegovina", "Brazil", "Bulgaria", "Cameroon", "Canada", "Chile", "China", "Colombia",
+    "Congo", "Costa Rica", "Croatia", "Cyprus", "Czech Republic", "Denmark", "DR Congo", "Ecuador",
+    "Egypt", "England", "Estonia", "Finland", "France", "Gabon", "Georgia", "Germany", "Ghana", "Greece",
+    "Guinea", "Honduras", "Hungary", "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland",
+    "Israel", "Italy", "Ivory Coast", "Jamaica", "Japan", "Jordan", "Kazakhstan", "Kenya", "Kosovo",
+    "Kuwait", "Latvia", "Lebanon", "Lithuania", "Luxembourg", "Malaysia", "Mali", "Mexico", "Moldova",
+    "Montenegro", "Morocco", "Netherlands", "New Zealand", "Nigeria", "North Macedonia",
+    "Northern Ireland", "Norway", "Oman", "Paraguay", "Peru", "Philippines", "Poland", "Portugal",
+    "Qatar", "Romania", "Russia", "Saudi Arabia", "Scotland", "Senegal", "Serbia", "Singapore",
+    "Slovakia", "Slovenia", "South Africa", "South Korea", "Spain", "Sweden", "Switzerland", "Syria",
+    "Thailand", "Tunisia", "Turkey", "Ukraine", "United Arab Emirates", "United States", "Uruguay",
+    "Uzbekistan", "Venezuela", "Vietnam", "Wales", "Zambia", "Zimbabwe",
+];
+
 pub fn show(
     schemas: &'static crate::fields::VersionedSchemas,
     ui: &mut egui::Ui,
@@ -69,7 +86,15 @@ pub fn show(
             nations,
         ),
         PlayerTab::PositionsTraits => show_positions_traits(schemas, ui, player, addr, &mut edits),
-        PlayerTab::Contract => show_contract(schemas, ui, player, clubs, &mut edits),
+        PlayerTab::Contract => show_contract(
+            schemas,
+            ui,
+            player,
+            clubs,
+            wage_period,
+            currency,
+            &mut edits,
+        ),
     });
 
     // Widgets address edits as `addr + schema offset`. A player-coach's person
@@ -391,27 +416,42 @@ fn show_overview(
                                 ui.separator();
                                 let query = filter.trim().to_lowercase();
 
-                                if let Some(nation_list) = nations {
-                                    for nat in nation_list.iter().filter(|n| query.is_empty() || n.name.to_lowercase().contains(&query)) {
-                                        let is_sel = current_nat == nat.name;
-                                        if ui.selectable_label(is_sel, &nat.name).clicked() {
-                                            if let Some(off) = schemas.offset_of("p_nation_ptr") {
-                                                if off + 8 <= player.raw.len() {
-                                                    let old_bytes = player.raw[off..off + 8].to_vec();
-                                                    let new_bytes = nat.addr.to_le_bytes().to_vec();
-                                                    player.raw[off..off + 8].copy_from_slice(&new_bytes);
-                                                    edits.push(FieldEdit {
-                                                        addr: addr + off as u64,
-                                                        old_raw: old_bytes,
-                                                        new_raw: new_bytes,
-                                                        description: format!("Nationality: {} \u{2192} {}", current_nat, nat.name),
-                                                    });
-                                                    player.nationality = Some(nat.name.clone());
+                                egui::ScrollArea::vertical()
+                                    .max_height(250.0)
+                                    .show(ui, |ui| {
+                                        let mut found_count = 0;
+                                        if let Some(nation_list) = nations {
+                                            for nat in nation_list.iter().filter(|n| query.is_empty() || n.name.to_lowercase().contains(&query)) {
+                                                found_count += 1;
+                                                let is_sel = current_nat == nat.name;
+                                                if ui.selectable_label(is_sel, &nat.name).clicked() {
+                                                    if let Some(off) = schemas.offset_of("p_nation_ptr") {
+                                                        if off + 8 <= player.raw.len() {
+                                                            let old_bytes = player.raw[off..off + 8].to_vec();
+                                                            let new_bytes = nat.addr.to_le_bytes().to_vec();
+                                                            player.raw[off..off + 8].copy_from_slice(&new_bytes);
+                                                            edits.push(FieldEdit {
+                                                                addr: addr + off as u64,
+                                                                old_raw: old_bytes,
+                                                                new_raw: new_bytes,
+                                                                description: format!("Nationality: {} \u{2192} {}", current_nat, nat.name),
+                                                            });
+                                                            player.nationality = Some(nat.name.clone());
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                }
+
+                                        if found_count == 0 {
+                                            for &name in DEFAULT_NATIONS.iter().filter(|n| query.is_empty() || n.to_lowercase().contains(&query)) {
+                                                let is_sel = current_nat == name;
+                                                if ui.selectable_label(is_sel, name).clicked() {
+                                                    player.nationality = Some(name.to_string());
+                                                }
+                                            }
+                                        }
+                                    });
                                 ui.data_mut(|d| d.insert_temp(search_id, filter));
                             });
                         ui.end_row();
@@ -1847,142 +1887,283 @@ fn show_contract(
     ui: &mut egui::Ui,
     player: &mut PlayerRecord,
     clubs: Option<&[crate::cache::CachedClub]>,
+    wage_period: WagePeriod,
+    currency: crate::settings::Currency,
     edits: &mut Vec<FieldEdit>,
 ) {
     let addr = player.addr;
+    let enabled = crate::ui::navigation::editing_enabled(ui);
+
     ui.horizontal_top(|ui| {
+        // ===================================================================
+        // CARD 1: Contract Details & Terms (~430px)
+        // ===================================================================
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(340.0);
-            ui.strong("Contract");
+            ui.set_width(430.0);
+            ui.heading("📄 Contract & Terms");
             ui.separator();
 
-            if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
-                if let Some(f) = schemas.field("p_contract_wage") {
-                    edits.extend(field_widget::raw_u32_edit(ui, &f, cr, caddr));
-                }
-                if let Some(f) = schemas.field("p_contract_expiry") {
-                    edits.extend(field_widget::date_edit(
-                        ui,
-                        "Expiry",
-                        cr,
-                        &f,
-                        caddr,
-                        2000..=2060,
-                    ));
-                }
-                if let Some(f) = schemas.field("p_squad_status") {
-                    let code = schemas
-                        .offset_of("p_squad_status")
-                        .and_then(|o| cr.get(o).copied());
-                    match code {
-                        Some(c) if !SQUAD_STATUS_OFFERED.iter().any(|(o, _)| *o == c) => {
-                            let name = squad_status_name(c)
-                                .map_or(format!("code {c}"), |n| format!("{n} ({c})"));
-                            field_widget::info_label(ui, "Squad Status", name);
+            egui::Grid::new(("contract_details_grid", addr))
+                .num_columns(2)
+                .spacing([14.0, 8.0])
+                .show(ui, |ui| {
+                    // Contracted Club
+                    ui.label("Contracted Club");
+                    ui.strong(player.club_name.as_deref().unwrap_or("Free Agent"));
+                    ui.end_row();
+
+                    // Wage
+                    if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                        if let Some(wage_off) = schemas.offset_of("p_contract_wage") {
+                            if wage_off + 4 <= cr.len() {
+                                ui.label("Wage");
+                                ui.horizontal(|ui| {
+                                    let old_bytes: [u8; 4] = cr[wage_off..wage_off + 4].try_into().unwrap();
+                                    let old_wage_gbp = u32::from_le_bytes(old_bytes) as i64;
+
+                                    let draft_id = egui::Id::new(("contract_wage_draft", addr));
+                                    let mut draft_text = ui
+                                        .data(|d| d.get_temp::<String>(draft_id))
+                                        .unwrap_or_else(|| {
+                                            let current_wage = match wage_period {
+                                                WagePeriod::Weekly => currency.from_gbp(old_wage_gbp),
+                                                WagePeriod::Monthly => currency.from_gbp(old_wage_gbp * 52 / 12),
+                                                WagePeriod::Annual => currency.from_gbp(old_wage_gbp * 52),
+                                            };
+                                            current_wage.to_string()
+                                        });
+
+                                    ui.label(currency.symbol());
+                                    let text_res = ui.add_enabled(
+                                        enabled,
+                                        egui::TextEdit::singleline(&mut draft_text).desired_width(95.0),
+                                    );
+
+                                    let mut apply_wage: Option<u32> = None;
+                                    if enabled && (text_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                                        if let Ok(parsed) = draft_text.trim().replace([',', '.'], "").parse::<i64>() {
+                                            let wage_gbp = match wage_period {
+                                                WagePeriod::Weekly => currency.to_gbp(parsed),
+                                                WagePeriod::Monthly => currency.to_gbp(parsed * 12 / 52),
+                                                WagePeriod::Annual => currency.to_gbp(parsed / 52),
+                                            };
+                                            apply_wage = Some(wage_gbp.clamp(0, u32::MAX as i64) as u32);
+                                        }
+                                    }
+                                    if enabled && ui.small_button("Set").clicked() {
+                                        if let Ok(parsed) = draft_text.trim().replace([',', '.'], "").parse::<i64>() {
+                                            let wage_gbp = match wage_period {
+                                                WagePeriod::Weekly => currency.to_gbp(parsed),
+                                                WagePeriod::Monthly => currency.to_gbp(parsed * 12 / 52),
+                                                WagePeriod::Annual => currency.to_gbp(parsed / 52),
+                                            };
+                                            apply_wage = Some(wage_gbp.clamp(0, u32::MAX as i64) as u32);
+                                        }
+                                    }
+
+                                    ui.label(egui::RichText::new(format!("({})", wage_period.label())).weak());
+
+                                    if let Some(new_wage) = apply_wage {
+                                        if new_wage != old_wage_gbp as u32 {
+                                            let new_bytes = new_wage.to_le_bytes();
+                                            cr[wage_off..wage_off + 4].copy_from_slice(&new_bytes);
+                                            edits.push(FieldEdit {
+                                                addr: caddr + wage_off as u64,
+                                                old_raw: old_bytes.to_vec(),
+                                                new_raw: new_bytes.to_vec(),
+                                                description: format!(
+                                                    "Wage: {} \u{2192} {}",
+                                                    format_wage(old_wage_gbp as u32, wage_period, currency),
+                                                    format_wage(new_wage, wage_period, currency)
+                                                ),
+                                            });
+                                        }
+                                    }
+
+                                    ui.data_mut(|d| d.insert_temp(draft_id, draft_text));
+                                });
+                                ui.end_row();
+                            }
                         }
-                        _ => edits.extend(field_widget::choice_u8_edit(
-                            ui,
-                            "Squad Status",
-                            cr,
-                            &f,
-                            caddr,
-                            SQUAD_STATUS_OFFERED,
-                        )),
+
+                        // Expiry Date
+                        if let Some(f) = schemas.field("p_contract_expiry") {
+                            ui.label("Expiry Date");
+                            ui.horizontal(|ui| {
+                                edits.extend(field_widget::date_edit(ui, "", cr, &f, caddr, 2020..=2060));
+                            });
+                            ui.end_row();
+                        }
+
+                        // Squad Status
+                        if let Some(f) = schemas.field("p_squad_status") {
+                            ui.label("Squad Status");
+                            let code = schemas.offset_of("p_squad_status").and_then(|o| cr.get(o).copied());
+                            match code {
+                                Some(c) if !SQUAD_STATUS_OFFERED.iter().any(|(o, _)| *o == c) => {
+                                    let name = squad_status_name(c).map_or(format!("code {c}"), |n| format!("{n} ({c})"));
+                                    ui.label(name);
+                                }
+                                _ => {
+                                    edits.extend(field_widget::choice_u8_edit(ui, "", cr, &f, caddr, SQUAD_STATUS_OFFERED));
+                                }
+                            }
+                            ui.end_row();
+                        }
+
+                        // Squad Number
+                        if let Some(f) = schemas.field("p_squad_number") {
+                            ui.label("Squad Number");
+                            edits.extend(field_widget::optional_u8_edit(ui, "", cr, &f, caddr, 99, 255));
+                            ui.end_row();
+                        }
+                    } else {
+                        ui.label("Contract Status");
+                        ui.label(egui::RichText::new("No active contract").weak());
+                        ui.end_row();
                     }
-                }
-                if let Some(f) = schemas.field("p_squad_number") {
-                    edits.extend(field_widget::optional_u8_edit(
-                        ui,
-                        "Squad Number",
-                        cr,
-                        &f,
-                        caddr,
-                        99,
-                        255,
-                    ));
-                }
+
+                    // Asking Price
+                    if let Some(f) = schemas.field("p_asking_price") {
+                        ui.label("Asking Price");
+                        edits.extend(field_widget::optional_money_edit(ui, "", &mut player.raw, &f, addr));
+                        ui.end_row();
+                    }
+
+                    // Other Dates & Stats
+                    for (key, label) in [
+                        ("p_contract_start", "Contract Start"),
+                        ("p_join_date", "Joined Club"),
+                        ("p_debut_date", "Senior Debut"),
+                    ] {
+                        if let Some(s) = fmt_date_field(schemas, &player.raw, key) {
+                            ui.label(label);
+                            ui.label(&s);
+                            ui.end_row();
+                        }
+                    }
+
+                    if let Some(apps) = player.field_u16("p_senior_apps") {
+                        ui.label("Senior Apps");
+                        ui.label(apps.to_string());
+                        ui.end_row();
+                    }
+                });
+
+            // Listing Flags
+            if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
                 if let Some(off) = schemas.offset_of("p_list_flags") {
                     if let Some(&flags) = cr.get(off) {
-                        let enabled = crate::ui::navigation::editing_enabled(ui);
-                        let mut transfer_listed = (flags & 1) != 0;
-                        let mut loan_listed = (flags & 2) != 0;
-                        let mut new_flags = flags;
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Checkbox::new(&mut transfer_listed, "Transfer Listed"),
-                            )
-                            .changed()
-                        {
-                            if transfer_listed {
-                                new_flags |= 1;
-                            } else {
-                                new_flags &= !1;
-                            }
-                        }
-                        if ui
-                            .add_enabled(
-                                enabled,
-                                egui::Checkbox::new(&mut loan_listed, "Loan Listed"),
-                            )
-                            .changed()
-                        {
-                            if loan_listed {
-                                new_flags |= 2;
-                            } else {
-                                new_flags &= !2;
-                            }
-                        }
-                        if new_flags != flags && enabled {
-                            cr[off] = new_flags;
-                            edits.push(FieldEdit {
-                                addr: caddr + off as u64,
-                                old_raw: vec![flags],
-                                new_raw: vec![new_flags],
-                                description: format!("Listing Flags: {flags} \u{2192} {new_flags}"),
+                        ui.add_space(8.0);
+                        egui::Frame::none()
+                            .fill(ui.visuals().faint_bg_color)
+                            .rounding(4.0)
+                            .inner_margin(8.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let mut transfer_listed = (flags & 1) != 0;
+                                    let mut loan_listed = (flags & 2) != 0;
+                                    let mut new_flags = flags;
+                                    if ui.add_enabled(enabled, egui::Checkbox::new(&mut transfer_listed, "Transfer Listed")).changed() {
+                                        if transfer_listed { new_flags |= 1; } else { new_flags &= !1; }
+                                    }
+                                    ui.add_space(16.0);
+                                    if ui.add_enabled(enabled, egui::Checkbox::new(&mut loan_listed, "Loan Listed")).changed() {
+                                        if loan_listed { new_flags |= 2; } else { new_flags &= !2; }
+                                    }
+                                    if new_flags != flags && enabled {
+                                        cr[off] = new_flags;
+                                        edits.push(FieldEdit {
+                                            addr: caddr + off as u64,
+                                            old_raw: vec![flags],
+                                            new_raw: vec![new_flags],
+                                            description: format!("Listing Flags: {flags} \u{2192} {new_flags}"),
+                                        });
+                                    }
+                                });
                             });
-                        }
                     }
-                }
-                if let Some(s) = schemas
-                    .offset_of("p_contract_signed")
-                    .and_then(|o| fmt_date_at(cr, o))
-                {
-                    field_widget::info_label(ui, "Signed", s);
-                }
-            } else {
-                ui.label("Contract sub-record unavailable.");
-            }
-            if let Some(f) = schemas.field("p_asking_price") {
-                edits.extend(field_widget::optional_money_edit(
-                    ui,
-                    "Asking Price",
-                    &mut player.raw,
-                    &f,
-                    addr,
-                ));
-            }
-
-            ui.add_space(4.0);
-
-            if let Some(apps) = player.field_u16("p_senior_apps") {
-                field_widget::info_label(ui, "Senior Apps", apps);
-            }
-
-            for (key, label) in [
-                ("p_contract_start", "Contract Start"),
-                ("p_join_date", "Joined Club"),
-                ("p_debut_date", "Senior Debut"),
-            ] {
-                if let Some(s) = fmt_date_field(schemas, &player.raw, key) {
-                    field_widget::info_label(ui, label, s);
                 }
             }
         });
 
-        ui.add_space(12.0);
-        show_move_to_club_card(schemas, ui, player, addr, clubs, edits);
+        ui.add_space(14.0);
+
+        // ===================================================================
+        // CARD 2: Transfers & Quick Actions (~340px)
+        // ===================================================================
+        ui.vertical(|ui| {
+            ui.set_width(340.0);
+            show_move_to_club_card(schemas, ui, player, addr, clubs, edits);
+
+            ui.add_space(8.0);
+
+            // Quick Contract Actions
+            if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                if let Some(f) = schemas.field("p_contract_expiry") {
+                    if let Some(loc) = f.offset.as_ref() {
+                        let off = loc.offset() as usize;
+                        if off + 4 <= cr.len() {
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.set_width(340.0);
+                                ui.strong("⚡ Quick Actions");
+                                ui.separator();
+
+                                let doy = u16::from_le_bytes(cr[off..off + 2].try_into().unwrap());
+                                let year = u16::from_le_bytes(cr[off + 2..off + 4].try_into().unwrap());
+
+                                ui.horizontal(|ui| {
+                                    if ui.add_enabled(enabled, egui::Button::new("+1 Year")).clicked() {
+                                        let new_year = year.saturating_add(1);
+                                        let mut new_bytes = [0u8; 4];
+                                        new_bytes[0..2].copy_from_slice(&doy.to_le_bytes());
+                                        new_bytes[2..4].copy_from_slice(&new_year.to_le_bytes());
+                                        let old_bytes = cr[off..off + 4].to_vec();
+                                        cr[off..off + 4].copy_from_slice(&new_bytes);
+                                        edits.push(FieldEdit {
+                                            addr: caddr + off as u64,
+                                            old_raw: old_bytes,
+                                            new_raw: new_bytes.to_vec(),
+                                            description: format!("Contract Expiry \u{2192} year {new_year}"),
+                                        });
+                                    }
+                                    if ui.add_enabled(enabled, egui::Button::new("+3 Years")).clicked() {
+                                        let new_year = year.saturating_add(3);
+                                        let mut new_bytes = [0u8; 4];
+                                        new_bytes[0..2].copy_from_slice(&doy.to_le_bytes());
+                                        new_bytes[2..4].copy_from_slice(&new_year.to_le_bytes());
+                                        let old_bytes = cr[off..off + 4].to_vec();
+                                        cr[off..off + 4].copy_from_slice(&new_bytes);
+                                        edits.push(FieldEdit {
+                                            addr: caddr + off as u64,
+                                            old_raw: old_bytes,
+                                            new_raw: new_bytes.to_vec(),
+                                            description: format!("Contract Expiry \u{2192} year {new_year}"),
+                                        });
+                                    }
+                                    if ui.add_enabled(enabled, egui::Button::new("Expire 2024")).clicked() {
+                                        let new_year = 2024;
+                                        let mut new_bytes = [0u8; 4];
+                                        new_bytes[0..2].copy_from_slice(&doy.to_le_bytes());
+                                        new_bytes[2..4].copy_from_slice(&new_year.to_le_bytes());
+                                        let old_bytes = cr[off..off + 4].to_vec();
+                                        cr[off..off + 4].copy_from_slice(&new_bytes);
+                                        edits.push(FieldEdit {
+                                            addr: caddr + off as u64,
+                                            old_raw: old_bytes,
+                                            new_raw: new_bytes.to_vec(),
+                                            description: "Contract Expiry \u{2192} 2024".into(),
+                                        });
+                                    }
+                                });
+                            });
+                        }
+                    }
+                }
+            }
+        });
     });
+}
 }
 
 /// Squad statuses offered for editing: one code per distinct label. Codes

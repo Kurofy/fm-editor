@@ -941,18 +941,24 @@ fn money_field_row(
                 apply_val = Some(parsed);
             }
         }
-        if enabled && (key == "c_transfer_budget" || key == "c_balance") {
-            let add_step = match currency {
-                crate::settings::Currency::Idr => 200_000_000_000i64,
-                _ => 10_000_000i64,
+        if enabled && (key == "c_transfer_budget" || key == "c_balance" || key == "c_transfer_remaining") {
+            let steps: &[(i64, &str)] = match currency {
+                crate::settings::Currency::Idr => &[
+                    (20_000_000_000i64, "+20M"),
+                    (200_000_000_000i64, "+200M"),
+                    (1_000_000_000_000i64, "+1T"),
+                ],
+                _ => &[
+                    (1_000_000i64, "+1M"),
+                    (10_000_000i64, "+10M"),
+                    (50_000_000i64, "+50M"),
+                ],
             };
-            if ui.small_button(format!("+{}", currency.format_compact(add_step))).clicked() {
-                let current_curr = currency.from_gbp(old_gbp);
-                apply_val = Some(current_curr.saturating_add(add_step));
-            }
-            if ui.small_button(format!("+{}", currency.format_compact(add_step * 5))).clicked() {
-                let current_curr = currency.from_gbp(old_gbp);
-                apply_val = Some(current_curr.saturating_add(add_step * 5));
+            for &(step_val, step_label) in steps {
+                if ui.small_button(step_label).clicked() {
+                    let current_curr = currency.from_gbp(old_gbp);
+                    apply_val = Some(current_curr.saturating_add(step_val));
+                }
             }
         }
         ui.label(
