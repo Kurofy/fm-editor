@@ -20,6 +20,7 @@ pub fn show(
     ui: &mut egui::Ui,
     club: &mut ClubView,
     tab: &mut ClubTab,
+    currency: &mut crate::settings::Currency,
 ) -> Vec<FieldEdit> {
     let mut edits = Vec::new();
 
@@ -63,7 +64,7 @@ pub fn show(
     egui::ScrollArea::vertical().show(ui, |ui| match tab {
         ClubTab::Overview => show_overview(schemas, ui, club, &mut edits),
         ClubTab::Facilities => show_facilities(schemas, ui, club, &mut edits),
-        ClubTab::Finance => show_finance(schemas, ui, club, &mut edits),
+        ClubTab::Finance => show_finance(schemas, ui, club, currency, &mut edits),
         ClubTab::Stadium => show_stadium(schemas, ui, club),
     });
 
@@ -216,30 +217,68 @@ fn show_finance(
     schemas: &'static crate::fields::VersionedSchemas,
     ui: &mut egui::Ui,
     club: &mut ClubView,
+    currency: &mut crate::settings::Currency,
     edits: &mut Vec<FieldEdit>,
 ) {
-    ui.strong("Finance");
-    // Each row edits the sub-record its schema location names (FM26 keeps the
-    // budgets in a finance → budget sub-record, FM27 in the finance object).
+    ui.horizontal(|ui| {
+        ui.strong("Finance");
+        ui.add_space(16.0);
+        ui.label("Currency:");
+        for c in [
+            crate::settings::Currency::Eur,
+            crate::settings::Currency::Usd,
+            crate::settings::Currency::Gbp,
+            crate::settings::Currency::Idr,
+        ] {
+            if ui
+                .selectable_label(*currency == c, c.label())
+                .clicked()
+            {
+                *currency = c;
+            }
+        }
+    });
+    ui.add_space(4.0);
+
     let mut shown = false;
-    // Labels come from the schema: FM24's screen says "Wage Budget", FM27's
-    // "Spending Wage Budget".
-    for key in ["c_balance", "c_transfer_budget", "c_transfer_remaining", "c_wage_budget"] {
-        let Some((container, offset)) = sub_location(schemas, key) else {
-            continue;
-        };
+
+    // Primary editable finances: Balance, Transfer Budget, Transfer Remaining, Wage Budget
+    for key in [
+        "c_balance",
+        "c_transfer_budget",
+        "c_transfer_remaining",
+        "c_wage_budget",
+    ] {
         let Some(field) = schemas.field(key) else { continue };
         let label = if key == "c_wage_budget" {
             format!("{} (p/w)", field.label)
         } else {
             field.label.to_string()
         };
-        let label = label.as_str();
-        if let Some((buf, base)) = club.sub_record_mut(container) {
-            u32_drag(ui, label, buf, offset, base, edits);
+
+        if let Some(row_edits) = money_field_row(ui, &label, key, club, schemas, *currency) {
+            edits.extend(row_edits);
             shown = true;
         }
     }
+
+    // Additional info / derived totals
+    for (label, key) in [
+        ("Currently Spending (p/w)", "c_wage_spending"),
+        ("Next Season Min Transfer Budget", "c_transfer_next_season"),
+        ("Total Wage Budget (p/w)", "c_wage_total"),
+        ("Youth Grant Income", "c_youth_grant"),
+    ] {
+        if let Some(v) = schemas
+            .field(key)
+            .and_then(|f| fields::read_field_u32(club, &club.raw, &f))
+        {
+            field_widget::info_label(ui, label, currency.format_gbp(v as i64));
+            shown = true;
+        }
+    }
+
+    // Ticket prices
     for (label, key) in [
         ("Avg Ticket Price", "c_avg_ticket"),
         ("Avg Season Ticket", "c_avg_season_ticket"),
@@ -252,19 +291,7 @@ fn show_finance(
             shown = true;
         }
     }
-    // Derived totals: shown, not edited (FM recomputes them).
-    for (label, key) in [
-        ("Total Wage Budget (p/w)", "c_wage_total"),
-        ("Youth Grant Income", "c_youth_grant"),
-    ] {
-        if let Some(v) = schemas
-            .field(key)
-            .and_then(|f| fields::read_field_u32(club, &club.raw, &f))
-        {
-            field_widget::info_label(ui, label, v);
-            shown = true;
-        }
-    }
+
     if !shown {
         ui.label("Finance data not available.");
     }
@@ -370,50 +397,215 @@ fn mirror_u8_edit(
 // the top-level club struct.
 // ---------------------------------------------------------------------------
 
-/// Editable u32 field (money, counts, etc.). Double-click to type exact value.
-fn u32_drag(
+/// Editable money field (Balance, Budgets, Wages).
+/// Displays and edits in the chosen `Currency` and converts to/from base GBP in memory.
+fn money_field_row(
     ui: &mut egui::Ui,
     label: &str,
-    raw: &mut [u8],
-    offset: usize,
-    base_addr: u64,
-    edits: &mut Vec<FieldEdit>,
-) {
+    key: &str,
+    club: &mut ClubView,
+    schemas: &'static crate::fields::VersionedSchemas,
+    currency: crate::settings::Currency,
+) -> Option<Vec<FieldEdit>> {
+    let loc = sub_location(schemas, key);
+    let (container, offset) = match loc {
+        Some((c, off)) if club.sub_record_mut(c).is_some() => (c, off),
+        _ => {
+            // Fallback for transfer budget/remaining if defined in budget sub-record but budget_raw is None
+            if key == "c_transfer_budget"
+                && club.finance_raw.as_ref().map_or(0, |b| b.len()) >= 0x7D0
+            {
+                ("finance", 0x7CC)
+            } else if key == "c_transfer_remaining"
+                && club.finance_raw.as_ref().map_or(0, |b| b.len()) >= 0x7D4
+            {
+                ("finance", 0x7D0)
+            } else {
+                return None;
+            }
+        }
+    };
+
+    let (raw, base_addr) = club.sub_record_mut(container)?;
     if offset + 4 > raw.len() {
-        return;
+        return None;
     }
+
+    let is_balance = key == "c_balance";
     let old_bytes: [u8; 4] = raw[offset..offset + 4].try_into().unwrap();
-    let old_val = u32::from_le_bytes(old_bytes);
-    let mut val = old_val as i64;
+    let old_gbp = if is_balance {
+        i32::from_le_bytes(old_bytes) as i64
+    } else {
+        u32::from_le_bytes(old_bytes) as i64
+    };
+
+    let mut curr_val = currency.from_gbp(old_gbp);
     let enabled = navigation::editing_enabled(ui);
     let mut changed = false;
+
+    let (range_min, range_max) = if is_balance {
+        (-2_000_000_000_000i64, 2_000_000_000_000i64)
+    } else {
+        (0i64, 2_000_000_000_000i64)
+    };
+
+    let speed = match currency {
+        crate::settings::Currency::Idr => {
+            if key == "c_wage_budget" { 100_000.0 } else { 1_000_000.0 }
+        }
+        _ => {
+            if key == "c_wage_budget" { 500.0 } else { 50_000.0 }
+        }
+    };
+
+    let prefix = format!("{} ", currency.symbol());
+
     ui.horizontal(|ui| {
-        ui.label(label);
+        ui.add_sized([160.0, 22.0], egui::Label::new(label));
         changed = ui
             .add_enabled_ui(enabled, |ui| {
                 ui.add_sized(
-                    [44.0, 22.0],
-                    egui::DragValue::new(&mut val)
+                    [150.0, 22.0],
+                    egui::DragValue::new(&mut curr_val)
+                        .prefix(prefix)
                         .update_while_editing(false)
-                        .range(0i64..=4_294_967_295i64)
-                        .speed(1.0),
+                        .range(range_min..=range_max)
+                        .speed(speed),
                 )
                 .changed()
             })
             .inner;
+        ui.label(
+            egui::RichText::new(currency.format_amount(curr_val))
+                .weak()
+                .size(11.0),
+        );
     });
+
+    let mut row_edits = Vec::new();
     if enabled && changed {
-        let new_val = val.clamp(0, 4_294_967_295) as u32;
-        if new_val != old_val {
-            let new_bytes = new_val.to_le_bytes();
+        let new_gbp = currency.to_gbp(curr_val);
+        let (min_gbp, max_gbp) = if is_balance {
+            (i32::MIN as i64, i32::MAX as i64)
+        } else {
+            (0i64, i32::MAX as i64)
+        };
+        let new_gbp = new_gbp.clamp(min_gbp, max_gbp);
+        if new_gbp != old_gbp {
+            let new_bytes = (new_gbp as i32).to_le_bytes();
             raw[offset..offset + 4].copy_from_slice(&new_bytes);
-            edits.push(FieldEdit {
+            row_edits.push(FieldEdit {
                 addr: base_addr + offset as u64,
                 old_raw: old_bytes.to_vec(),
                 new_raw: new_bytes.to_vec(),
-                description: format!("{label}: {old_val} \u{2192} {new_val}"),
+                description: format!(
+                    "{label}: {} \u{2192} {}",
+                    currency.format_gbp(old_gbp),
+                    currency.format_gbp(new_gbp)
+                ),
             });
+
+            mirror_budget_finance(
+                club,
+                key,
+                container,
+                new_gbp as i32,
+                label,
+                currency,
+                &mut row_edits,
+            );
         }
+    }
+
+    Some(row_edits)
+}
+
+fn mirror_budget_finance(
+    club: &mut ClubView,
+    key: &str,
+    primary_container: &str,
+    new_val: i32,
+    label: &str,
+    currency: crate::settings::Currency,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let new_bytes = new_val.to_le_bytes();
+    match key {
+        "c_transfer_budget" => {
+            if primary_container == "finance" {
+                if let (Some(b_raw), Some(b_addr)) = (club.budget_raw.as_mut(), club.budget_addr) {
+                    if b_raw.len() >= 8 {
+                        let old = b_raw[4..8].to_vec();
+                        b_raw[4..8].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: b_addr + 4,
+                            old_raw: old,
+                            new_raw: new_bytes.to_vec(),
+                            description: format!("{label} (budget copy): {}", currency.format_gbp(new_val as i64)),
+                        });
+                    }
+                }
+            } else if primary_container == "budget" {
+                if let (Some(f_raw), Some(f_addr)) = (club.finance_raw.as_mut(), club.finance_addr) {
+                    if f_raw.len() >= 0x7D0 {
+                        let old = f_raw[0x7CC..0x7D0].to_vec();
+                        f_raw[0x7CC..0x7D0].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: f_addr + 0x7CC,
+                            old_raw: old,
+                            new_raw: new_bytes.to_vec(),
+                            description: format!("{label} (finance copy): {}", currency.format_gbp(new_val as i64)),
+                        });
+                    }
+                }
+            }
+        }
+        "c_transfer_remaining" => {
+            if primary_container == "finance" {
+                if let (Some(b_raw), Some(b_addr)) = (club.budget_raw.as_mut(), club.budget_addr) {
+                    if b_raw.len() >= 12 {
+                        let old = b_raw[8..12].to_vec();
+                        b_raw[8..12].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: b_addr + 8,
+                            old_raw: old,
+                            new_raw: new_bytes.to_vec(),
+                            description: format!("{label} (budget copy): {}", currency.format_gbp(new_val as i64)),
+                        });
+                    }
+                }
+            } else if primary_container == "budget" {
+                if let (Some(f_raw), Some(f_addr)) = (club.finance_raw.as_mut(), club.finance_addr) {
+                    if f_raw.len() >= 0x7D4 {
+                        let old = f_raw[0x7D0..0x7D4].to_vec();
+                        f_raw[0x7D0..0x7D4].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: f_addr + 0x7D0,
+                            old_raw: old,
+                            new_raw: new_bytes.to_vec(),
+                            description: format!("{label} (finance copy): {}", currency.format_gbp(new_val as i64)),
+                        });
+                    }
+                }
+            }
+        }
+        "c_wage_budget" => {
+            if primary_container == "finance" {
+                if let (Some(b_raw), Some(b_addr)) = (club.budget_raw.as_mut(), club.budget_addr) {
+                    if b_raw.len() >= 16 {
+                        let old = b_raw[12..16].to_vec();
+                        b_raw[12..16].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: b_addr + 12,
+                            old_raw: old,
+                            new_raw: new_bytes.to_vec(),
+                            description: format!("{label} (budget copy): {}", currency.format_gbp(new_val as i64)),
+                        });
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -450,7 +642,7 @@ fn f32_drag(
         changed = ui
             .add_enabled_ui(enabled, |ui| {
                 ui.add_sized(
-                    [44.0, 22.0],
+                    [80.0, 22.0],
                     egui::DragValue::new(&mut val)
                         .update_while_editing(false)
                         .range(0.0f32..=100_000.0f32)
@@ -564,5 +756,47 @@ mod tests {
         let (edits, raw) = run_f32(50.0, false);
         assert!(edits.is_empty());
         assert_eq!(raw, 50.0f32.to_le_bytes());
+    }
+
+    #[test]
+    fn mirror_budget_finance_updates_budget_when_finance_edited() {
+        let mut club = ClubView {
+            addr: 0x1000,
+            index: 0,
+            raw: vec![0; 0x200],
+            uid: 100,
+            full_name: "Test Club".to_string(),
+            short_name: "Test".to_string(),
+            info_raw: None,
+            info_addr: None,
+            finance_raw: Some(vec![0; 0x830]),
+            finance_addr: Some(0x2000),
+            stadium_raw: None,
+            senior_team_raw: None,
+            senior_team_addr: None,
+            budget_raw: Some(vec![0; 0x20]),
+            budget_addr: Some(0x3000),
+            stadium_entity_raw: None,
+            stadium_name: None,
+            stadium_name2: None,
+        };
+
+        let mut edits = Vec::new();
+        mirror_budget_finance(
+            &mut club,
+            "c_transfer_budget",
+            "finance",
+            25_000_000,
+            "Transfer Budget",
+            crate::settings::Currency::Eur,
+            &mut edits,
+        );
+
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].addr, 0x3000 + 4);
+        assert_eq!(
+            club.budget_raw.as_ref().unwrap()[4..8],
+            25_000_000i32.to_le_bytes()
+        );
     }
 }

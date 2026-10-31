@@ -103,14 +103,19 @@ from the sub-records. Verified on the test save's human manager (role ratings Ma
   training facilities" / "Excellent youth facilities", with junior coaching
   0x12C = 17 "Excellent" and youth recruitment 0x12D = 15 "Good" on the same
   screen. FM27 uses the same offsets.
-- Finance (+0x150), budget (finance+0x48) and attendance (stadium-sub +0xB0,
-  0x68/0x6C/0x70) unchanged. The wage budget is **finance+0x810** (i32 £/week),
-  not budget+0x0C: Spurs' finance screen shows Wage Budget £3,421,987 p/w
-  (+0x810), currently spending £3,271,987 (+0x81C) and next season's minimum
-  guaranteed transfer budget £25.92M (+0x7D4 = 25,925,482). budget+0x0C read
-  3,464,579 for Spurs and equals +0x810 for Arsenal, Barcelona and Derby.
-  Transfer budget £5.7M is both budget+0x04 and finance+0x7CC. The average
-  ticket price float is at both finance+0x18 (mapped) and +0x870.
+- Finance (+0x150, read size 0x830), budget (finance+0x48) and attendance
+  (stadium-sub +0xB0, 0x68/0x6C/0x70). Live finance fields sit directly in the
+  finance object:
+  - Balance: **finance+0x14** (signed i32).
+  - Transfer budget: **finance+0x7CC** (and mirrored to budget+0x04 when present).
+  - Transfer remaining: **finance+0x7D0** (and mirrored to budget+0x08 when present).
+  - Next season's minimum guaranteed transfer budget: **finance+0x7D4** (25,925,482 for Spurs).
+  - Wage budget: **finance+0x810** (i32 £/week, mirrored to budget+0x0C when present;
+    Spurs £3,421,987 p/w).
+  - Currently spending wage: **finance+0x81C** (Spurs £3,271,987).
+  - Average ticket price float: **finance+0x18** (and +0x870); season ticket **finance+0x1C**.
+  Edits to transfer and wage budgets mirror to the budget sub-record (finance+0x48)
+  so all game screens reflect updates whether reading finance or budget.
 - Home stadium: club+0x18 → [0] senior team → +0x78, same chain as FM26.
 - Not mapped: gender (+0x161 holds 0/2/4/8/10/32, not FM26's 0/1), nickname
   (stadium-sub +0x90 is a short name here), team UID, training ground,

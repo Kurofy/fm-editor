@@ -11,7 +11,7 @@ use crate::cache::{CachedClub, CachedPlayer, CachedStaff, EntityCache};
 use crate::game_version::GameBuild;
 use crate::player::PlayerRecord;
 use crate::process::RunningGame;
-use crate::settings::{AppSettings, Scale, Theme, WagePeriod, theme_data_id};
+use crate::settings::{AppSettings, Currency, Scale, Theme, WagePeriod, currency_data_id, theme_data_id};
 use crate::staff::StaffRecord;
 use crate::ui::navigation::{self, BrowserHistory};
 use crate::ui::pages::{
@@ -728,7 +728,10 @@ impl eframe::App for FmEditorApp {
         // Also enforce the configured theme's visuals so eframe/winit system-theme
         // events after `CreationContext` cannot revert the user's saved theme.
         ctx.set_visuals(self.settings.theme.visuals());
-        ctx.data_mut(|d| d.insert_temp(theme_data_id(), self.settings.theme));
+        ctx.data_mut(|d| {
+            d.insert_temp(theme_data_id(), self.settings.theme);
+            d.insert_temp(currency_data_id(), self.settings.currency);
+        });
         navigation::set_result_keyboard_enabled(
             ctx,
             !ctx.wants_keyboard_input() && !self.advanced_open,
@@ -808,6 +811,26 @@ impl eframe::App for FmEditorApp {
                                 .clicked()
                             {
                                 self.settings.wage_period = period;
+                                self.settings.save();
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button("Currency", |ui| {
+                        for currency in [
+                            Currency::Eur,
+                            Currency::Usd,
+                            Currency::Gbp,
+                            Currency::Idr,
+                        ] {
+                            if ui
+                                .selectable_label(
+                                    self.settings.currency == currency,
+                                    currency.label(),
+                                )
+                                .clicked()
+                            {
+                                self.settings.currency = currency;
                                 self.settings.save();
                                 ui.close_menu();
                             }
@@ -1339,7 +1362,7 @@ impl eframe::App for FmEditorApp {
                                     let addr = p.addr;
                                     let e = player_panel::show(
                                         schemas, ui, p, &mut self.player_tab, addr,
-                                        wage_period, face_pack_path.as_deref(),
+                                        wage_period, self.settings.currency, face_pack_path.as_deref(),
                                     );
                                     edits.extend(e);
                                 } else {
@@ -1356,7 +1379,17 @@ impl eframe::App for FmEditorApp {
                             }
                             EntityTabType::Club => {
                                 if let Some(c) = self.selected_club.as_mut().filter(|c| c.addr == tab_addr) {
-                                    let e = club_panel::show(schemas, ui, c, &mut self.club_tab);
+                                    let prev_curr = self.settings.currency;
+                                    let e = club_panel::show(
+                                        schemas,
+                                        ui,
+                                        c,
+                                        &mut self.club_tab,
+                                        &mut self.settings.currency,
+                                    );
+                                    if self.settings.currency != prev_curr {
+                                        self.settings.save();
+                                    }
                                     edits.extend(e);
                                 } else {
                                     ui.label("Club details unavailable. Reload while the game is connected.");
@@ -1385,6 +1418,7 @@ impl eframe::App for FmEditorApp {
                                 clicked_club = pages::club_search::results_grid(
                                     ui,
                                     &club_filtered,
+                                    self.settings.currency,
                                 );
                             }
                             Page::HumanManager | Page::BestXi => unreachable!(),

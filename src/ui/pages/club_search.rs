@@ -138,7 +138,11 @@ fn sorted_indices(results: &[&CachedClub], state: &GridState) -> Vec<usize> {
 }
 
 /// Returns the original results-slice index, even when the display is sorted.
-pub fn results_grid(ui: &mut egui::Ui, results: &[&CachedClub]) -> Option<usize> {
+pub fn results_grid(
+    ui: &mut egui::Ui,
+    results: &[&CachedClub],
+    currency: crate::settings::Currency,
+) -> Option<usize> {
     const ROW_HEIGHT: f32 = 22.0;
     const COLUMNS: [(SortColumn, &str, f32); 3] = [
         (SortColumn::Name, "Club Name", 260.0),
@@ -213,7 +217,7 @@ pub fn results_grid(ui: &mut egui::Ui, results: &[&CachedClub]) -> Option<usize>
                     let glyph = if club.gender == 1 { "♀" } else { "♂" };
                     let budget = club
                         .transfer_budget
-                        .map(|value| value.to_string())
+                        .map(|value| currency.format_gbp(value as i64))
                         .unwrap_or_else(|| "Unknown".into());
                     for (text, width) in [
                         (format!("{glyph} {}", club.name), COLUMNS[0].2),

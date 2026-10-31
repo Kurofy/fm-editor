@@ -22,6 +22,7 @@ pub fn show(
     tab: &mut PlayerTab,
     addr: u64,
     wage_period: WagePeriod,
+    currency: crate::settings::Currency,
     face_pack_path: Option<&str>,
 ) -> Vec<FieldEdit> {
     let mut edits = Vec::new();
@@ -60,6 +61,7 @@ pub fn show(
             addr,
             &mut edits,
             wage_period,
+            currency,
             face_pack_path,
         ),
         PlayerTab::PositionsTraits => show_positions_traits(schemas, ui, player, addr, &mut edits),
@@ -93,6 +95,7 @@ fn show_overview(
     addr: u64,
     edits: &mut Vec<FieldEdit>,
     wage_period: WagePeriod,
+    currency: crate::settings::Currency,
     face_pack_path: Option<&str>,
 ) {
     // Look up fields once from the schema; passing them by reference into
@@ -228,7 +231,7 @@ fn show_overview(
                 .field_u32("p_weekly_wage")
                 .or_else(|| player.field_u32("p_contract_wage"))
             {
-                field_widget::info_label(ui, "Wage", format_wage(wage, wage_period));
+                field_widget::info_label(ui, "Wage", format_wage(wage, wage_period, currency));
             }
         });
     });
