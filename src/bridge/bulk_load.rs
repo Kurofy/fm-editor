@@ -281,10 +281,15 @@ pub(super) fn load_entity_cache(
             .or_else(|| {
                 let teams_ptr = fm.read_u64(ptr + 0x18).ok()?;
                 if teams_ptr > 0x10000 && teams_ptr < 0x7FFFFFFFFFFF {
-                    let st = fm.read_u64(teams_ptr).ok()?;
-                    if st > 0x10000 && st < 0x7FFFFFFFFFFF {
-                        return Some(st);
+                    if fm.read_u64(teams_ptr + 0x30).ok() == Some(ptr) {
+                        return Some(teams_ptr);
                     }
+                    if let Ok(st) = fm.read_u64(teams_ptr) {
+                        if st > 0x10000 && st < 0x7FFFFFFFFFFF {
+                            return Some(st);
+                        }
+                    }
+                    return Some(teams_ptr);
                 }
                 None
             });

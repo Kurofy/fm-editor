@@ -400,10 +400,18 @@ fn show_affiliations(
             let mut to_remove = None;
             for (i, aff) in club.affiliations.iter().enumerate() {
                 let is_selected = i == selected_idx;
-                let display_name = if aff.parent_club_name == club.full_name {
+                let display_name = if aff.parent_club_name.eq_ignore_ascii_case(&club.full_name)
+                    || aff.parent_club_name.eq_ignore_ascii_case(&club.short_name)
+                    || aff.parent_club_name == "Parent Club"
+                {
                     &aff.feeder_club_name
-                } else {
+                } else if aff.feeder_club_name.eq_ignore_ascii_case(&club.full_name)
+                    || aff.feeder_club_name.eq_ignore_ascii_case(&club.short_name)
+                    || aff.feeder_club_name == "Feeder Club"
+                {
                     &aff.parent_club_name
+                } else {
+                    &aff.feeder_club_name
                 };
 
                 let label_text = format!("{:<20}  {}", display_name, aff.affiliation_type.label());
