@@ -886,13 +886,17 @@ fn money_field_row(
         }
     };
 
-    let (raw, base_addr) = club.sub_record_mut(container)?;
-    if offset + 4 > raw.len() {
-        return None;
-    }
+    let club_addr = club.addr;
+    let (old_bytes, base_addr) = {
+        let (raw, base) = club.sub_record_mut(container)?;
+        if offset + 4 > raw.len() {
+            return None;
+        }
+        let bytes: [u8; 4] = raw[offset..offset + 4].try_into().unwrap();
+        (bytes, base)
+    };
 
     let is_balance = key == "c_balance";
-    let old_bytes: [u8; 4] = raw[offset..offset + 4].try_into().unwrap();
     let old_gbp = if is_balance {
         i32::from_le_bytes(old_bytes) as i64
     } else {
@@ -900,7 +904,7 @@ fn money_field_row(
     };
 
     let enabled = navigation::editing_enabled(ui);
-    let draft_id = egui::Id::new(("club_money_draft", key, club.addr));
+    let draft_id = egui::Id::new(("club_money_draft", key, club_addr));
     let mut draft = ui
         .data(|d| d.get_temp::<MoneyDraft>(draft_id))
         .unwrap_or_default();
@@ -961,7 +965,11 @@ fn money_field_row(
         let new_gbp = new_gbp.clamp(min_gbp, max_gbp);
         if new_gbp != old_gbp {
             let new_bytes = (new_gbp as i32).to_le_bytes();
-            raw[offset..offset + 4].copy_from_slice(&new_bytes);
+            if let Some((raw, _)) = club.sub_record_mut(container) {
+                if offset + 4 <= raw.len() {
+                    raw[offset..offset + 4].copy_from_slice(&new_bytes);
+                }
+            }
             row_edits.push(FieldEdit {
                 addr: base_addr + offset as u64,
                 old_raw: old_bytes.to_vec(),

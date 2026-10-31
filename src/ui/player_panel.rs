@@ -377,9 +377,9 @@ fn show_overview(
 
                         // Nationality dropdown
                         ui.label("Nationality");
-                        let current_nat = player.nationality.as_deref().unwrap_or("Unknown");
+                        let current_nat = player.nationality.clone().unwrap_or_else(|| "Unknown".to_string());
                         egui::ComboBox::from_id_salt(("player_nationality_combo", addr))
-                            .selected_text(current_nat)
+                            .selected_text(&current_nat)
                             .width(140.0)
                             .show_ui(ui, |ui| {
                                 let search_id = egui::Id::new(("nat_search_filter", addr));
@@ -415,6 +415,12 @@ fn show_overview(
                                 ui.data_mut(|d| d.insert_temp(search_id, filter));
                             });
                         ui.end_row();
+
+                        if let Some(wage) = player.field_u32("p_contract_wage") {
+                            ui.label("Wage");
+                            ui.label(format_wage(wage, wage_period, currency));
+                            ui.end_row();
+                        }
                     });
 
                 ui.add_space(4.0);
