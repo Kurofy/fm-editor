@@ -1360,9 +1360,11 @@ impl eframe::App for FmEditorApp {
                             EntityTabType::Player => {
                                 if let Some(p) = self.selected_player.as_mut().filter(|p| p.addr == tab_addr) {
                                     let addr = p.addr;
+                                    let clubs = self.entity_cache.as_deref().map(|c| c.clubs.as_slice());
                                     let e = player_panel::show(
                                         schemas, ui, p, &mut self.player_tab, addr,
                                         wage_period, self.settings.currency, face_pack_path.as_deref(),
+                                        clubs,
                                     );
                                     edits.extend(e);
                                 } else {

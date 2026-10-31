@@ -11,7 +11,7 @@
 //! handling/reflexes r=0.89, DL/WBL r=0.82, every attribute byte <= 100,
 //! max(left, right foot) = 20 for 100%, CA <= PA, world rep <= home rep 99.7%.
 
-use crate::fields::{date, direct, encoded, fm_string, pointer, raw, sub_date, sub_direct, sub_fm_string, sub_raw_u32, Field, SubRecord, SubRecordParent};
+use crate::fields::{date, direct, encoded, fm_string, pointer, raw, raw_u32, sub_date, sub_direct, sub_fm_string, sub_raw_u32, Field, SubRecord, SubRecordParent};
 use crate::fields::Category::*;
 use crate::fields::Entity::Player;
 
@@ -102,8 +102,14 @@ pub(crate) const FIELDS: &[Field] = &[
     Field { key: "p_name",             label: "Name",             entity: Player, category: General,  offset: fm_string(0x02C0) },
     Field { key: "p_name_first_sub",   label: "Name First Sub",   entity: Player, category: Internal, offset: pointer(0x02D0) },
     Field { key: "p_name_last_sub",    label: "Name Last Sub",     entity: Player, category: Internal, offset: pointer(0x02D8) },
+    Field { key: "p_weight",       label: "Weight",           entity: Player, category: General,     offset: raw(0x014C) },
     Field { key: "p_height",       label: "Height",           entity: Player, category: General,     offset: raw(0x014E) },
     Field { key: "p_dob",          label: "Date of Birth",    entity: Player, category: General,     offset: date(0x02BC) },
+    Field { key: "p_ethnicity",    label: "Ethnicity",        entity: Player, category: General,     offset: direct(0x0309) },
+    Field { key: "p_hair_colour",  label: "Hair Colour",      entity: Player, category: General,     offset: direct(0x030A) },
+    Field { key: "p_hair_length",  label: "Hair Length",      entity: Player, category: General,     offset: direct(0x030B) },
+    Field { key: "p_skin_tone",    label: "Skin Tone",        entity: Player, category: General,     offset: direct(0x030C) },
+    Field { key: "p_asking_price", label: "Asking Price",     entity: Player, category: Contract,    offset: raw_u32(0x01D4) },
     Field { key: "p_club_ptr",       label: "Club Entity",       entity: Player, category: Internal,    offset: pointer(0x03B0) },
     Field { key: "p_ca",           label: "Current Ability",  entity: Player, category: Ability,     offset: raw(0x0200) },
     Field { key: "p_pa",           label: "Potential Ability", entity: Player, category: Ability,     offset: raw(0x0202) },
@@ -142,12 +148,13 @@ pub(crate) const FIELDS: &[Field] = &[
     Field { key: "p_contract_wage",    label: "Wage (£ p/w)",     entity: Player, category: Contract,   offset: sub_raw_u32("contract", 0x18) },
     Field { key: "p_contract_expiry",  label: "Contract Expiry",  entity: Player, category: Contract,   offset: sub_date("contract", 0x40) },
     Field { key: "p_squad_status",     label: "Squad Status",     entity: Player, category: Contract,   offset: sub_direct("contract", 0x4C) },
+    Field { key: "p_list_flags",       label: "Listing Flags",    entity: Player, category: Contract,   offset: sub_direct("contract", 0x4F) },
     Field { key: "p_squad_number",     label: "Squad Number",     entity: Player, category: Contract,   offset: sub_direct("contract", 0x55) },
 
-    // Not yet located in FM24.
-    Field { key: "p_sharpness",    label: "Sharpness",        entity: Player, category: Condition,   offset: None },
-    Field { key: "p_fitness",      label: "Fitness",           entity: Player, category: Condition,   offset: None },
-    Field { key: "p_fatigue",      label: "Fatigue",           entity: Player, category: Condition,   offset: None },
+    // Condition, morale, and traits (0x1F4..0x1F8, 0x25E, 0x368).
+    Field { key: "p_sharpness",    label: "Sharpness",        entity: Player, category: Condition,   offset: raw(0x01F4) },
+    Field { key: "p_fatigue",      label: "Fatigue",           entity: Player, category: Condition,   offset: raw(0x01F6) },
+    Field { key: "p_fitness",      label: "Fitness",           entity: Player, category: Condition,   offset: raw(0x01F8) },
     Field { key: "p_name2",            label: "Name (secondary)",  entity: Player, category: Internal, offset: None },
     Field { key: "p_name2_first_sub",  label: "Name2 First Sub",   entity: Player, category: Internal, offset: None },
     Field { key: "p_name2_last_sub",   label: "Name2 Last Sub",    entity: Player, category: Internal, offset: None },
@@ -164,6 +171,6 @@ pub(crate) const FIELDS: &[Field] = &[
     Field { key: "p_squad_ptr",      label: "Squad Record",      entity: Player, category: Internal,    offset: None },
     Field { key: "p_contract_type",    label: "Contract Type",    entity: Player, category: Contract,   offset: None     },
     Field { key: "p_contract_signed",  label: "Contract Signed",  entity: Player, category: Contract,   offset: None    },
-    Field { key: "p_morale",       label: "Morale",           entity: Player, category: Condition,   offset: None },
-    Field { key: "p_traits",       label: "Traits (PPMs)",    entity: Player, category: Traits,      offset: None },
+    Field { key: "p_morale",       label: "Morale",           entity: Player, category: Condition,   offset: direct(0x025E) },
+    Field { key: "p_traits",       label: "Traits (PPMs)",    entity: Player, category: Traits,      offset: raw(0x0368) },
 ];

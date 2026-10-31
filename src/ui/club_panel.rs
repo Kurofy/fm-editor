@@ -469,9 +469,9 @@ fn show_affiliations(
                                 let prev_d = d;
                                 let prev_m = m;
                                 let prev_y = y;
-                                ui.add(egui::DragValue::new(&mut d).clamp_range(1..=31).prefix("D: "));
-                                ui.add(egui::DragValue::new(&mut m).clamp_range(1..=12).prefix("M: "));
-                                ui.add(egui::DragValue::new(&mut y).clamp_range(1900..=2100).prefix("Y: "));
+                                ui.add(egui::DragValue::new(&mut d).range(1..=31).prefix("D: "));
+                                ui.add(egui::DragValue::new(&mut m).range(1..=12).prefix("M: "));
+                                ui.add(egui::DragValue::new(&mut y).range(1900..=2100).prefix("Y: "));
                                 if d != prev_d || m != prev_m || y != prev_y {
                                     let old_doy = aff.start_doy;
                                     let old_yr = aff.start_year;
@@ -507,9 +507,9 @@ fn show_affiliations(
                                 let prev_d = d;
                                 let prev_m = m;
                                 let prev_y = y;
-                                ui.add(egui::DragValue::new(&mut d).clamp_range(1..=31).prefix("D: "));
-                                ui.add(egui::DragValue::new(&mut m).clamp_range(1..=12).prefix("M: "));
-                                ui.add(egui::DragValue::new(&mut y).clamp_range(1900..=2100).prefix("Y: "));
+                                ui.add(egui::DragValue::new(&mut d).range(1..=31).prefix("D: "));
+                                ui.add(egui::DragValue::new(&mut m).range(1..=12).prefix("M: "));
+                                ui.add(egui::DragValue::new(&mut y).range(1900..=2100).prefix("Y: "));
                                 let is_perm = aff.end_year == 1900;
                                 if ui.selectable_label(is_perm, "Permanent").clicked() {
                                     d = 1;
@@ -546,7 +546,7 @@ fn show_affiliations(
 
                             // Affiliation Type
                             ui.label("Affiliation Type");
-                            egui::ComboBox::from_id_source("aff_type_combo")
+                            egui::ComboBox::from_id_salt("aff_type_combo")
                                 .selected_text(aff.affiliation_type.label())
                                 .show_ui(ui, |ui| {
                                     for &t in crate::affiliation::AffiliationType::ALL {
@@ -622,7 +622,7 @@ fn show_affiliations(
                                 if ui
                                     .add_enabled(
                                         enabled,
-                                        egui::DragValue::new(&mut val).clamp_range(0..=100),
+                                        egui::DragValue::new(&mut val).range(0..=100),
                                     )
                                     .changed()
                                 {
@@ -647,7 +647,7 @@ fn show_affiliations(
                                 if ui
                                     .add_enabled(
                                         enabled,
-                                        egui::DragValue::new(&mut val).clamp_range(0..=99),
+                                        egui::DragValue::new(&mut val).range(0..=99),
                                     )
                                     .changed()
                                 {
@@ -672,7 +672,7 @@ fn show_affiliations(
                                 if ui
                                     .add_enabled(
                                         enabled,
-                                        egui::DragValue::new(&mut val).clamp_range(0..=100),
+                                        egui::DragValue::new(&mut val).range(0..=100),
                                     )
                                     .changed()
                                 {

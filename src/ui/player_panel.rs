@@ -24,6 +24,7 @@ pub fn show(
     wage_period: WagePeriod,
     currency: crate::settings::Currency,
     face_pack_path: Option<&str>,
+    clubs: Option<&[crate::cache::CachedClub]>,
 ) -> Vec<FieldEdit> {
     let mut edits = Vec::new();
     crate::ui::entity_header::show(
@@ -48,12 +49,12 @@ pub fn show(
         ui.selectable_value(tab, PlayerTab::Overview, "Overview");
         ui.selectable_value(tab, PlayerTab::PositionsTraits, "Positions & Traits");
         if player.contract_raw.is_some() {
-            ui.selectable_value(tab, PlayerTab::Contract, "Contract");
+            ui.selectable_value(tab, PlayerTab::Contract, "Contract & Transfer");
         }
     });
     ui.separator();
 
-    egui::ScrollArea::vertical().show(ui, |ui| match tab {
+    egui::ScrollArea::both().show(ui, |ui| match tab {
         PlayerTab::Overview => show_overview(
             schemas,
             ui,
@@ -63,9 +64,10 @@ pub fn show(
             wage_period,
             currency,
             face_pack_path,
+            clubs,
         ),
         PlayerTab::PositionsTraits => show_positions_traits(schemas, ui, player, addr, &mut edits),
-        PlayerTab::Contract => show_contract(schemas, ui, player, &mut edits),
+        PlayerTab::Contract => show_contract(schemas, ui, player, clubs, &mut edits),
     });
 
     // Widgets address edits as `addr + schema offset`. A player-coach's person
@@ -85,8 +87,227 @@ pub fn show(
 }
 
 // ---------------------------------------------------------------------------
-// Overview
+// Overview (FMRTE-style multi-column layout)
 // ---------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+struct PersonalDraft {
+    addr: u64,
+    first_name: String,
+    last_name: String,
+    common_name: String,
+    shirt_name: String,
+    nationality_info: usize,
+    body_type: usize,
+    days_in_country: u32,
+    non_eu_italy: bool,
+}
+
+#[derive(Clone, Default)]
+struct MoveClubDraft {
+    search_query: String,
+    selected_club_addr: Option<u64>,
+    selected_club_name: String,
+    on_loan: bool,
+}
+
+struct RoleProfile {
+    name: &'static str,
+    is_gk: bool,
+    key_attrs: &'static [&'static str],
+    pref_attrs: &'static [&'static str],
+}
+
+const ROLE_PROFILES: &[RoleProfile] = &[
+    RoleProfile {
+        name: "Goalkeeper (GK)",
+        is_gk: true,
+        key_attrs: &[
+            "aerial_reach", "command_of_area", "communication", "handling",
+            "kicking", "one_on_ones", "reflexes", "throwing", "agility",
+            "concentration", "positioning",
+        ],
+        pref_attrs: &[
+            "first_touch", "passing", "rushing_out", "anticipation",
+            "bravery", "composure", "decisions",
+        ],
+    },
+    RoleProfile {
+        name: "Sweeper Keeper (GK)",
+        is_gk: true,
+        key_attrs: &[
+            "command_of_area", "kicking", "one_on_ones", "reflexes",
+            "rushing_out", "anticipation", "composure", "concentration",
+            "positioning", "agility",
+        ],
+        pref_attrs: &[
+            "aerial_reach", "communication", "first_touch", "handling",
+            "passing", "throwing", "decisions", "vision", "acceleration",
+        ],
+    },
+    RoleProfile {
+        name: "Central Defender (DC)",
+        is_gk: false,
+        key_attrs: &[
+            "heading", "marking", "tackling", "positioning",
+            "jumping_reach", "strength",
+        ],
+        pref_attrs: &[
+            "aggression", "anticipation", "bravery", "composure",
+            "concentration", "decisions", "pace",
+        ],
+    },
+    RoleProfile {
+        name: "Ball Playing Defender (DC)",
+        is_gk: false,
+        key_attrs: &[
+            "heading", "marking", "passing", "tackling", "composure",
+            "positioning", "jumping_reach", "strength",
+        ],
+        pref_attrs: &[
+            "first_touch", "technique", "aggression", "anticipation",
+            "bravery", "concentration", "decisions", "vision", "pace",
+        ],
+    },
+    RoleProfile {
+        name: "Full Back (DL/DR)",
+        is_gk: false,
+        key_attrs: &[
+            "marking", "tackling", "anticipation", "concentration",
+            "positioning", "teamwork", "pace", "stamina",
+        ],
+        pref_attrs: &[
+            "crossing", "dribbling", "passing", "technique",
+            "decisions", "work_rate", "acceleration", "agility",
+        ],
+    },
+    RoleProfile {
+        name: "Wing Back (WBL/WBR)",
+        is_gk: false,
+        key_attrs: &[
+            "crossing", "dribbling", "marking", "tackling", "off_the_ball",
+            "teamwork", "work_rate", "acceleration", "pace", "stamina",
+        ],
+        pref_attrs: &[
+            "first_touch", "passing", "technique", "anticipation",
+            "concentration", "decisions", "positioning", "agility", "balance",
+        ],
+    },
+    RoleProfile {
+        name: "Defensive Midfielder (DM)",
+        is_gk: false,
+        key_attrs: &[
+            "tackling", "anticipation", "concentration", "positioning",
+            "teamwork", "stamina",
+        ],
+        pref_attrs: &[
+            "first_touch", "marking", "passing", "aggression", "bravery",
+            "composure", "decisions", "work_rate", "strength",
+        ],
+    },
+    RoleProfile {
+        name: "Deep Lying Playmaker (DM/MC)",
+        is_gk: false,
+        key_attrs: &[
+            "first_touch", "passing", "technique", "composure",
+            "decisions", "teamwork", "vision",
+        ],
+        pref_attrs: &[
+            "anticipation", "off_the_ball", "positioning", "balance",
+        ],
+    },
+    RoleProfile {
+        name: "Box-to-Box Midfielder (MC)",
+        is_gk: false,
+        key_attrs: &[
+            "passing", "tackling", "off_the_ball", "teamwork",
+            "work_rate", "stamina",
+        ],
+        pref_attrs: &[
+            "dribbling", "finishing", "first_touch", "long_shots", "technique",
+            "aggression", "anticipation", "bravery", "composure",
+            "concentration", "decisions", "positioning", "acceleration",
+            "pace", "strength",
+        ],
+    },
+    RoleProfile {
+        name: "Advanced Playmaker (MC/AMC)",
+        is_gk: false,
+        key_attrs: &[
+            "first_touch", "passing", "technique", "composure", "decisions",
+            "flair", "off_the_ball", "teamwork", "vision",
+        ],
+        pref_attrs: &["dribbling", "anticipation", "agility"],
+    },
+    RoleProfile {
+        name: "Winger (ML/MR/AML/AMR)",
+        is_gk: false,
+        key_attrs: &[
+            "crossing", "dribbling", "technique", "off_the_ball",
+            "acceleration", "pace",
+        ],
+        pref_attrs: &[
+            "first_touch", "passing", "flair", "work_rate",
+            "agility", "balance", "stamina",
+        ],
+    },
+    RoleProfile {
+        name: "Inside Forward (AML/AMR)",
+        is_gk: false,
+        key_attrs: &[
+            "dribbling", "finishing", "first_touch", "technique",
+            "off_the_ball", "acceleration", "agility", "pace",
+        ],
+        pref_attrs: &[
+            "long_shots", "passing", "anticipation", "composure",
+            "flair", "balance", "stamina",
+        ],
+    },
+    RoleProfile {
+        name: "Shadow Striker (AMC)",
+        is_gk: false,
+        key_attrs: &[
+            "dribbling", "finishing", "first_touch", "anticipation",
+            "composure", "off_the_ball", "acceleration",
+        ],
+        pref_attrs: &[
+            "passing", "technique", "concentration", "decisions",
+            "flair", "work_rate", "agility", "balance", "pace", "stamina",
+        ],
+    },
+    RoleProfile {
+        name: "Poacher (ST)",
+        is_gk: false,
+        key_attrs: &[
+            "finishing", "first_touch", "anticipation", "composure",
+            "off_the_ball",
+        ],
+        pref_attrs: &[
+            "heading", "technique", "decisions", "acceleration",
+            "agility", "balance", "pace",
+        ],
+    },
+    RoleProfile {
+        name: "Complete Forward (ST)",
+        is_gk: false,
+        key_attrs: &[
+            "dribbling", "finishing", "first_touch", "heading", "technique",
+            "anticipation", "composure", "off_the_ball", "acceleration",
+            "agility", "jumping_reach", "pace", "strength",
+        ],
+        pref_attrs: &[
+            "long_shots", "passing", "decisions", "teamwork", "vision",
+            "work_rate", "balance", "stamina",
+        ],
+    },
+];
+
+const LOWER_IS_BETTER: &[&str] = &[
+    "eccentricity",
+    "p_dirtiness",
+    "injury_proneness",
+    "p_controversy",
+];
 
 fn show_overview(
     schemas: &'static crate::fields::VersionedSchemas,
@@ -97,9 +318,8 @@ fn show_overview(
     wage_period: WagePeriod,
     currency: crate::settings::Currency,
     face_pack_path: Option<&str>,
+    clubs: Option<&[crate::cache::CachedClub]>,
 ) {
-    // Look up fields once from the schema; passing them by reference into
-    // the widget helpers avoids every panel line hardcoding an offset.
     let p_dob = schemas.field("p_dob").unwrap();
     let p_ca = schemas.field("p_ca").unwrap();
     let p_pa = schemas.field("p_pa").unwrap();
@@ -107,165 +327,1318 @@ fn show_overview(
     let p_home_rep = schemas.field("p_home_rep").unwrap();
     let p_world_rep = schemas.field("p_world_rep").unwrap();
 
-    // Face image — shown when a face pack path is configured and the UID is known.
-    let face_uid = player.field_u32("p_uid").filter(|&uid| uid > 0);
-    if let (Some(path), Some(uid)) = (face_pack_path, face_uid) {
-        let img_path = std::path::Path::new(path).join(format!("{uid}.png"));
-        let uri = format!("file:///{}", img_path.to_string_lossy().replace('\\', "/"));
-        ui.add(egui::Image::new(uri).max_size(egui::vec2(80.0, 80.0)));
-        ui.add_space(4.0);
-    }
+    let is_natural_gk = player.field_u8("pos_gk").unwrap_or(1) >= 15;
 
-    // Top info row: Personal | Ability | Reputation
-    ui.horizontal_wrapped(|ui| {
-        // Personal Details
-        ui.vertical(|ui| {
-            ui.strong("Identity");
+    let role_id = egui::Id::new(("player_role_idx", addr));
+    let default_role_idx = if is_natural_gk { 0 } else { 14 };
+    let mut role_idx = ui
+        .data(|d| d.get_temp::<usize>(role_id))
+        .unwrap_or(default_role_idx)
+        .min(ROLE_PROFILES.len() - 1);
+
+    let gk_toggle_id = egui::Id::new(("player_tech_gk_toggle", addr));
+    let mut show_gk_attrs = ui
+        .data(|d| d.get_temp::<bool>(gk_toggle_id))
+        .unwrap_or(is_natural_gk);
+
+    ui.horizontal_top(|ui| {
+        // ===================================================================
+        // COLUMN 1: Personal Details
+        // ===================================================================
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(275.0);
+            ui.strong("Personal Details");
+            ui.separator();
+
+            // Face image when configured
+            let face_uid = player.field_u32("p_uid").filter(|&uid| uid > 0);
+            if let (Some(path), Some(uid)) = (face_pack_path, face_uid) {
+                let img_path = std::path::Path::new(path).join(format!("{uid}.png"));
+                let uri = format!("file:///{}", img_path.to_string_lossy().replace('\\', "/"));
+                ui.add(egui::Image::new(uri).max_size(egui::vec2(72.0, 72.0)));
+                ui.add_space(4.0);
+            }
+
+            let draft_id = egui::Id::new(("personal_draft", addr));
+            let mut draft = ui
+                .data(|d| d.get_temp::<PersonalDraft>(draft_id))
+                .filter(|d| d.addr == addr)
+                .unwrap_or_else(|| {
+                    let full = player.name.clone().unwrap_or_default();
+                    let mut parts = full.splitn(2, ' ');
+                    let first = parts.next().unwrap_or("").to_string();
+                    let last = parts.next().unwrap_or("").to_string();
+                    let shirt = if !last.is_empty() && !first.is_empty() {
+                        format!("{}. {}", first.chars().next().unwrap_or(' '), last)
+                    } else {
+                        full.clone()
+                    };
+                    PersonalDraft {
+                        addr,
+                        first_name: first,
+                        last_name: last,
+                        common_name: String::new(),
+                        shirt_name: shirt,
+                        nationality_info: 0,
+                        body_type: 1, // Mesomorph
+                        days_in_country: 1825,
+                        non_eu_italy: false,
+                    }
+                });
+
+            let enabled = crate::ui::navigation::editing_enabled(ui);
+
+            egui::Grid::new(("personal_details_grid", addr))
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("First Name");
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut draft.first_name).desired_width(145.0),
+                        )
+                        .changed()
+                    {
+                        let combined = format!("{} {}", draft.first_name.trim(), draft.last_name.trim())
+                            .trim()
+                            .to_string();
+                        if !combined.is_empty() {
+                            player.name = Some(combined);
+                        }
+                    }
+                    ui.end_row();
+
+                    ui.label("Last Name");
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut draft.last_name).desired_width(145.0),
+                        )
+                        .changed()
+                    {
+                        let combined = format!("{} {}", draft.first_name.trim(), draft.last_name.trim())
+                            .trim()
+                            .to_string();
+                        if !combined.is_empty() {
+                            player.name = Some(combined);
+                        }
+                    }
+                    ui.end_row();
+
+                    ui.label("Common Name");
+                    ui.add_enabled(
+                        enabled,
+                        egui::TextEdit::singleline(&mut draft.common_name).desired_width(145.0),
+                    );
+                    ui.end_row();
+
+                    ui.label("Full Name");
+                    let mut full_name = player.name.clone().unwrap_or_default();
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut full_name).desired_width(145.0),
+                        )
+                        .changed()
+                    {
+                        let mut parts = full_name.splitn(2, ' ');
+                        draft.first_name = parts.next().unwrap_or("").to_string();
+                        draft.last_name = parts.next().unwrap_or("").to_string();
+                        player.name = Some(full_name);
+                    }
+                    ui.end_row();
+
+                    ui.label("Shirt Name");
+                    ui.add_enabled(
+                        enabled,
+                        egui::TextEdit::singleline(&mut draft.shirt_name).desired_width(145.0),
+                    );
+                    ui.end_row();
+
+                    ui.label("Unique ID");
+                    ui.horizontal(|ui| {
+                        let uid_str = player
+                            .field_u32("p_uid")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "Unknown".into());
+                        ui.label(&uid_str);
+                        if ui.small_button("📋").on_hover_text("Copy UID").clicked() {
+                            ui.ctx().copy_text(uid_str);
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("Nationality");
+                    let mut nat = player.nationality.clone().unwrap_or_default();
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut nat).desired_width(145.0),
+                        )
+                        .changed()
+                    {
+                        player.nationality = Some(nat);
+                    }
+                    ui.end_row();
+
+                    ui.label("Nationality Info");
+                    const NAT_INFOS: &[&str] = &[
+                        "Declared For Nation",
+                        "Eligible For Nation",
+                        "Capped At Youth Level",
+                        "Dual Nationality",
+                    ];
+                    egui::ComboBox::from_id_salt(("nat_info_combo", addr))
+                        .selected_text(NAT_INFOS[draft.nationality_info.min(NAT_INFOS.len() - 1)])
+                        .width(145.0)
+                        .show_ui(ui, |ui| {
+                            for (i, &label) in NAT_INFOS.iter().enumerate() {
+                                ui.selectable_value(&mut draft.nationality_info, i, label);
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("City Of Birth");
+                    let mut city = player.birthplace.clone().unwrap_or_default();
+                    if ui
+                        .add_enabled(
+                            enabled,
+                            egui::TextEdit::singleline(&mut city).desired_width(145.0),
+                        )
+                        .changed()
+                    {
+                        player.birthplace = Some(city);
+                    }
+                    ui.end_row();
+
+                    ui.label("Body Type");
+                    const BODY_TYPES: &[&str] = &["Ectomorph", "Mesomorph", "Endomorph"];
+                    egui::ComboBox::from_id_salt(("body_type_combo", addr))
+                        .selected_text(BODY_TYPES[draft.body_type.min(BODY_TYPES.len() - 1)])
+                        .width(145.0)
+                        .show_ui(ui, |ui| {
+                            for (i, &label) in BODY_TYPES.iter().enumerate() {
+                                ui.selectable_value(&mut draft.body_type, i, label);
+                            }
+                        });
+                    ui.end_row();
+                });
+
+            ui.add_space(4.0);
             edits.extend(field_widget::dob_edit(ui, &mut player.raw, &p_dob, addr));
-            if let Some(f) = schemas.field("p_height") {
-                edits.extend(field_widget::raw_u16_edit(
+
+            // Appearance dropdowns (Hair Colour, Hair Length, Skin Colour + swatch, Ethnicity)
+            if let Some(f) = schemas.field("p_hair_colour") {
+                edits.extend(field_widget::choice_u8_edit(
                     ui,
-                    &f,
+                    "Hair Colour",
                     &mut player.raw,
-                    250,
+                    &f,
                     addr,
+                    HAIR_COLOURS,
                 ));
             }
-            if let Some(birthplace) = &player.birthplace {
-                field_widget::info_label(ui, "Place of Birth", birthplace);
+            if let Some(f) = schemas.field("p_hair_length") {
+                edits.extend(field_widget::choice_u8_edit(
+                    ui,
+                    "Hair Length",
+                    &mut player.raw,
+                    &f,
+                    addr,
+                    HAIR_LENGTHS,
+                ));
             }
-        });
-
-        // Appearance (shown in the 3D match), when the schema maps it.
-        if schemas.offset_of("p_skin_tone").is_some() {
-            ui.separator();
-            ui.vertical(|ui| {
-                ui.strong("Appearance");
-                if let Some(f) = schemas.field("p_ethnicity") {
+            if let Some(f) = schemas.field("p_skin_tone") {
+                ui.horizontal(|ui| {
                     edits.extend(field_widget::choice_u8_edit(
                         ui,
-                        "Ethnicity",
+                        "Skin Colour",
                         &mut player.raw,
                         &f,
                         addr,
-                        ETHNICITIES,
+                        SKIN_TONES,
                     ));
-                }
-                for (key, max) in [
-                    ("p_skin_tone", 19),
-                    ("p_hair_colour", 18),
-                    ("p_hair_length", 6),
-                ] {
-                    if let Some(f) = schemas.field(key) {
-                        edits.extend(field_widget::raw_u8_edit(
-                            ui,
-                            &f,
-                            &mut player.raw,
-                            max,
-                            addr,
-                        ));
+                    if let Some(tone) = player.field_u8("p_skin_tone") {
+                        let color = skin_tone_color(tone);
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 2.0, color);
                     }
-                }
+                });
+            }
+            if let Some(f) = schemas.field("p_ethnicity") {
+                edits.extend(field_widget::choice_u8_edit(
+                    ui,
+                    "Ethnicity",
+                    &mut player.raw,
+                    &f,
+                    addr,
+                    ETHNICITIES,
+                ));
+            }
+
+            // Height & Weight
+            if let Some(f) = schemas.field("p_height") {
+                edits.extend(field_widget::raw_u16_edit(ui, &f, &mut player.raw, 250, addr));
+            }
+            if let Some(f) = schemas.field("p_weight") {
+                edits.extend(field_widget::raw_u16_edit(ui, &f, &mut player.raw, 150, addr));
+            }
+
+            // Days in Country
+            ui.horizontal(|ui| {
+                ui.label("Days in Country");
+                ui.add_enabled(
+                    enabled,
+                    egui::DragValue::new(&mut draft.days_in_country).range(0..=30000),
+                );
             });
-        }
 
-        ui.separator();
+            // Asking Price
+            if let Some(f) = schemas.field("p_asking_price") {
+                edits.extend(field_widget::optional_money_edit(
+                    ui,
+                    "Asking Price",
+                    &mut player.raw,
+                    &f,
+                    addr,
+                ));
+            }
 
-        // Ability
-        ui.vertical(|ui| {
-            ui.strong("Ability");
-            edits.extend(field_widget::ca_pa_edit(
+            // Editable Caps / Goals
+            editable_pair_row(
+                schemas,
                 ui,
+                "Caps / Goals",
+                "p_intl_caps",
+                "p_intl_goals",
                 &mut player.raw,
-                &p_ca,
-                &p_pa,
                 addr,
-            ));
-        });
+                edits,
+            );
 
-        ui.separator();
+            // Editable Sub (U21) Caps / Goals
+            editable_pair_row(
+                schemas,
+                ui,
+                "Sub Caps / Goals",
+                "p_u21_caps",
+                "p_u21_goals",
+                &mut player.raw,
+                addr,
+                edits,
+            );
 
-        // Reputation
-        ui.vertical(|ui| {
-            ui.strong("Reputation");
-            if let Some(e) =
-                field_widget::raw_u16_edit(ui, &p_current_rep, &mut player.raw, 10000, addr)
-            {
-                edits.push(e);
-            }
-            if let Some(e) =
-                field_widget::raw_u16_edit(ui, &p_home_rep, &mut player.raw, 10000, addr)
-            {
-                edits.push(e);
-            }
-            if let Some(e) =
-                field_widget::raw_u16_edit(ui, &p_world_rep, &mut player.raw, 10000, addr)
-            {
-                edits.push(e);
-            }
-        });
+            // Left Foot / Right Foot side-by-side
+            editable_foot_row(schemas, ui, &mut player.raw, addr, edits);
 
-        ui.separator();
-
-        // Stats
-        ui.vertical(|ui| {
-            ui.strong("Stats");
-            // Each row shows only when the record's schema maps the field.
-            if let Some(apps) = player.field_u16("p_senior_apps") {
-                field_widget::info_label(ui, "Snr Apps", apps);
-            }
-            if let (Some(caps), Some(goals)) = (
-                player.field_int("p_intl_caps"),
-                player.field_int("p_intl_goals"),
-            ) {
-                field_widget::info_label(ui, "Intl Caps / Goals", format!("{caps} / {goals}"));
-            }
-            if let (Some(caps), Some(goals)) = (
-                player.field_int("p_u21_caps"),
-                player.field_int("p_u21_goals"),
-            ) {
-                field_widget::info_label(ui, "U21 Caps / Goals", format!("{caps} / {goals}"));
-            }
-            // FM27 has no struct-level weekly wage; fall back to the contract's.
+            // Wage display
             if let Some(wage) = player
                 .field_u32("p_weekly_wage")
                 .or_else(|| player.field_u32("p_contract_wage"))
             {
                 field_widget::info_label(ui, "Wage", format_wage(wage, wage_period, currency));
             }
+
+            // Treated As Non-EU In Italy
+            ui.add_enabled(
+                enabled,
+                egui::Checkbox::new(&mut draft.non_eu_italy, "Treated As Non-EU In Italy"),
+            );
+
+            ui.data_mut(|d| d.insert_temp(draft_id, draft));
+        });
+
+        ui.add_space(6.0);
+
+        // ===================================================================
+        // COLUMN 2: Technical / Goal Keeper + Reputation + Ability
+        // ===================================================================
+        ui.vertical(|ui| {
+            ui.set_width(235.0);
+            let role = &ROLE_PROFILES[role_idx];
+
+            // Technical / Goal Keeper Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let mut fields = if show_gk_attrs {
+                    let mut gk = schemas.fields_for_category(Entity::Player, Category::Goalkeeping);
+                    if let Some(ft) = schemas.field("first_touch").cloned() {
+                        gk.push(ft);
+                    }
+                    if let Some(pa) = schemas.field("passing").cloned() {
+                        gk.push(pa);
+                    }
+                    gk
+                } else {
+                    let mut tech = schemas.fields_for_category(Entity::Player, Category::Technical);
+                    tech.extend(schemas.fields_for_category(Entity::Player, Category::SetPieces));
+                    tech
+                };
+                fields.sort_by_key(|f| f.label);
+
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!show_gk_attrs, "Technical").clicked() {
+                        show_gk_attrs = false;
+                        ui.data_mut(|d| d.insert_temp(gk_toggle_id, show_gk_attrs));
+                    }
+                    if ui.selectable_label(show_gk_attrs, "Goal Keeper").clicked() {
+                        show_gk_attrs = true;
+                        ui.data_mut(|d| d.insert_temp(gk_toggle_id, show_gk_attrs));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease all by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, -1, edits);
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase all by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, 1, edits);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+
+                for f in &fields {
+                    render_highlighted_attr(ui, f, role, &mut player.raw, addr, edits);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Reputation Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Reputation");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease reputation by 500").clicked() {
+                            for key in ["p_home_rep", "p_current_rep", "p_world_rep"] {
+                                if let Some(cur) = player.field_u16(key) {
+                                    set_u16_value(
+                                        schemas,
+                                        &mut player.raw,
+                                        addr,
+                                        key,
+                                        cur.saturating_sub(500),
+                                        edits,
+                                    );
+                                }
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase reputation by 500").clicked() {
+                            for key in ["p_home_rep", "p_current_rep", "p_world_rep"] {
+                                if let Some(cur) = player.field_u16(key) {
+                                    set_u16_value(
+                                        schemas,
+                                        &mut player.raw,
+                                        addr,
+                                        key,
+                                        (cur + 500).min(10000),
+                                        edits,
+                                    );
+                                }
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                if let Some(e) = field_widget::raw_u16_edit(ui, &p_home_rep, &mut player.raw, 10000, addr) {
+                    edits.push(e);
+                }
+                if let Some(e) = field_widget::raw_u16_edit(ui, &p_current_rep, &mut player.raw, 10000, addr) {
+                    edits.push(e);
+                }
+                if let Some(e) = field_widget::raw_u16_edit(ui, &p_world_rep, &mut player.raw, 10000, addr) {
+                    edits.push(e);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Ability Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Ability");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    edits.extend(field_widget::ca_pa_edit(
+                        ui,
+                        &mut player.raw,
+                        &p_ca,
+                        &p_pa,
+                        addr,
+                    ));
+                    let ca = player.field_u8("p_ca").unwrap_or(0) as i16;
+                    let pa = player.field_u8("p_pa").unwrap_or(0) as i16;
+                    ui.label(format!("({})", (pa - ca).max(0)));
+                });
+
+                let ca_val = player.field_u8("p_ca").unwrap_or(0);
+                let pa_val = player.field_u8("p_pa").unwrap_or(0);
+                ui.add(
+                    egui::ProgressBar::new(ca_val as f32 / 200.0)
+                        .text(format!("CA {ca_val} / PA {pa_val}")),
+                );
+
+                let rec_ca = recommended_ca(player);
+                ui.horizontal(|ui| {
+                    ui.label("Recommended CA");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(format!("🛠 {rec_ca}"))
+                            .on_hover_text("Click to set CA to Recommended CA")
+                            .clicked()
+                        {
+                            set_raw_u8_value(schemas, &mut player.raw, addr, "p_ca", rec_ca, edits);
+                        }
+                    });
+                });
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // ===================================================================
+        // COLUMN 3: Mental + Personality
+        // ===================================================================
+        ui.vertical(|ui| {
+            ui.set_width(235.0);
+            let role = &ROLE_PROFILES[role_idx];
+
+            // Mental Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let mut fields = schemas.fields_for_category(Entity::Player, Category::Mental);
+                fields.sort_by_key(|f| f.label);
+
+                ui.horizontal(|ui| {
+                    ui.strong("Mental");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease all Mental by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, -1, edits);
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase all Mental by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, 1, edits);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+
+                for f in &fields {
+                    render_highlighted_attr(ui, f, role, &mut player.raw, addr, edits);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Personality Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let fields = schemas.fields_for_category(Entity::Player, Category::Personality);
+
+                ui.horizontal(|ui| {
+                    ui.strong("Personality");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease all Personality by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, -1, edits);
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase all Personality by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, 1, edits);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+
+                for f in &fields {
+                    render_highlighted_attr(ui, f, role, &mut player.raw, addr, edits);
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+
+        // ===================================================================
+        // COLUMN 4: Physical + Hidden + Condition
+        // ===================================================================
+        ui.vertical(|ui| {
+            ui.set_width(235.0);
+            let role = &ROLE_PROFILES[role_idx];
+
+            // Physical Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let mut fields = schemas.fields_for_category(Entity::Player, Category::Physical);
+                fields.sort_by_key(|f| f.label);
+
+                ui.horizontal(|ui| {
+                    ui.strong("Physical");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease all Physical by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, -1, edits);
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase all Physical by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, 1, edits);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+
+                for f in &fields {
+                    render_highlighted_attr(ui, f, role, &mut player.raw, addr, edits);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Hidden Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                let fields = schemas.fields_for_category(Entity::Player, Category::Hidden);
+
+                ui.horizontal(|ui| {
+                    ui.strong("Hidden");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("-").on_hover_text("Decrease all Hidden by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, -1, edits);
+                            }
+                        }
+                        if ui.small_button("+").on_hover_text("Increase all Hidden by 1").clicked() {
+                            for f in &fields {
+                                shift_attr_value(schemas, &mut player.raw, addr, f.key, 1, edits);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+
+                for f in &fields {
+                    render_highlighted_attr(ui, f, role, &mut player.raw, addr, edits);
+                }
+            });
+
+            // Condition & Morale Card (when mapped)
+            let cond_fields = schemas.fields_for_category(Entity::Player, Category::Condition);
+            if !cond_fields.is_empty() {
+                ui.add_space(6.0);
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.strong("Condition & Morale");
+                    ui.separator();
+                    for f in &cond_fields {
+                        if let Some(e) = field_widget::render_field(ui, f, &mut player.raw, addr) {
+                            edits.push(e);
+                        }
+                    }
+                });
+            }
+        });
+
+        ui.add_space(6.0);
+
+        // ===================================================================
+        // COLUMN 5: Role Attributes, Player Presets, & Move to Club
+        // ===================================================================
+        ui.vertical(|ui| {
+            ui.set_width(240.0);
+
+            // Attributes Role Quick-Set Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Attributes");
+                ui.separator();
+
+                egui::ComboBox::from_id_salt(("role_profile_combo", addr))
+                    .selected_text(ROLE_PROFILES[role_idx].name)
+                    .width(210.0)
+                    .show_ui(ui, |ui| {
+                        for (i, rp) in ROLE_PROFILES.iter().enumerate() {
+                            if ui.selectable_value(&mut role_idx, i, rp.name).changed() {
+                                ui.data_mut(|d| d.insert_temp(role_id, role_idx));
+                                show_gk_attrs = rp.is_gk;
+                                ui.data_mut(|d| d.insert_temp(gk_toggle_id, show_gk_attrs));
+                            }
+                        }
+                    });
+
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::from_rgb(76, 175, 80), "■ Key for role");
+                    ui.colored_label(egui::Color32::from_rgb(66, 150, 240), "■ Preferable");
+                });
+                ui.colored_label(egui::Color32::from_rgb(230, 80, 90), "■ Lower is better");
+
+                ui.add_space(4.0);
+                ui.label("Set role attributes to");
+                let role = &ROLE_PROFILES[role_idx];
+
+                for row_vals in [[20u8, 14, 12], [10u8, 5, 1]] {
+                    ui.horizontal(|ui| {
+                        for &target in &row_vals {
+                            if ui
+                                .add_sized([64.0, 22.0], egui::Button::new(target.to_string()))
+                                .clicked()
+                            {
+                                for &k in role.key_attrs.iter().chain(role.pref_attrs.iter()) {
+                                    set_attr_value(schemas, &mut player.raw, addr, k, target, edits);
+                                }
+                            }
+                        }
+                    });
+                }
+
+                ui.horizontal(|ui| {
+                    if ui.add_sized([98.0, 22.0], egui::Button::new("-")).clicked() {
+                        for &k in role.key_attrs.iter().chain(role.pref_attrs.iter()) {
+                            shift_attr_value(schemas, &mut player.raw, addr, k, -1, edits);
+                        }
+                    }
+                    if ui.add_sized([98.0, 22.0], egui::Button::new("+")).clicked() {
+                        for &k in role.key_attrs.iter().chain(role.pref_attrs.iter()) {
+                            shift_attr_value(schemas, &mut player.raw, addr, k, 1, edits);
+                        }
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.label("Options");
+                if ui
+                    .add_sized([205.0, 24.0], egui::Button::new("⭐ Make WonderKid"))
+                    .on_hover_text("Set PA to 195, CA to 155+, and boost key role & mental attributes")
+                    .clicked()
+                {
+                    apply_wonderkid(schemas, &mut player.raw, addr, role, edits);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Player(s) Presets Card
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.strong("Player(s) Presets");
+                ui.separator();
+
+                for (label, preset) in [
+                    ("Heal", PlayerPreset::Heal),
+                    ("Inspire", PlayerPreset::Inspire),
+                    ("Destroy", PlayerPreset::Destroy),
+                    ("Remove bans", PlayerPreset::RemoveBans),
+                    ("Register for UEFA", PlayerPreset::RegisterUefa),
+                    ("Remove Int. Withdrawal", PlayerPreset::RemoveIntWithdrawal),
+                    ("Trained at club", PlayerPreset::TrainedAtClub),
+                    ("Trained at nation", PlayerPreset::TrainedAtNation),
+                    ("Create history point", PlayerPreset::CreateHistoryPoint),
+                    ("Improve Team Cohesion", PlayerPreset::ImproveTeamCohesion),
+                    ("Tactical Understanding", PlayerPreset::TacticalUnderstanding),
+                    ("All-in-one", PlayerPreset::AllInOne),
+                ] {
+                    if ui.add_sized([205.0, 22.0], egui::Button::new(label)).clicked() {
+                        apply_player_preset(schemas, player, addr, preset, edits);
+                    }
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Move to club Card
+            show_move_to_club_card(schemas, ui, player, addr, clubs, edits);
         });
     });
+}
 
-    ui.separator();
+#[derive(Clone, Copy)]
+enum PlayerPreset {
+    Heal,
+    Inspire,
+    Destroy,
+    RemoveBans,
+    RegisterUefa,
+    RemoveIntWithdrawal,
+    TrainedAtClub,
+    TrainedAtNation,
+    CreateHistoryPoint,
+    ImproveTeamCohesion,
+    TacticalUnderstanding,
+    AllInOne,
+}
 
-    for groups in [
-        [
-            ("Technical", Category::Technical),
-            ("Mental", Category::Mental),
-            ("Physical", Category::Physical),
-            ("Hidden", Category::Hidden),
-        ],
-        [
-            ("Set Pieces", Category::SetPieces),
-            ("Goalkeeping", Category::Goalkeeping),
-            ("Footedness", Category::Footedness),
-            ("Personality", Category::Personality),
-        ],
-    ] {
-        crate::ui::entity_header::columns(ui, |index, col| {
-            let (heading, category) = groups[index];
-            field_widget::category_column(
-                schemas,
-                col,
-                heading,
-                Entity::Player,
-                category,
-                &mut player.raw,
-                addr,
-                edits,
-            );
-        });
+fn apply_wonderkid(
+    schemas: &'static crate::fields::VersionedSchemas,
+    raw: &mut [u8],
+    addr: u64,
+    role: &RoleProfile,
+    edits: &mut Vec<FieldEdit>,
+) {
+    set_raw_u8_value(schemas, raw, addr, "p_pa", 195, edits);
+    let cur_ca = schemas
+        .offset_of("p_ca")
+        .and_then(|o| raw.get(o).copied())
+        .unwrap_or(100);
+    if cur_ca < 155 {
+        set_raw_u8_value(schemas, raw, addr, "p_ca", 155, edits);
     }
+    for &k in role.key_attrs {
+        set_attr_value(schemas, raw, addr, k, 17, edits);
+    }
+    for &k in role.pref_attrs {
+        set_attr_value(schemas, raw, addr, k, 15, edits);
+    }
+    for k in [
+        "determination",
+        "p_ambition",
+        "p_professionalism",
+        "p_loyalty",
+        "p_pressure",
+        "p_temperament",
+        "consistency",
+        "important_matches",
+    ] {
+        set_attr_value(schemas, raw, addr, k, 18, edits);
+    }
+    set_attr_value(schemas, raw, addr, "injury_proneness", 2, edits);
+}
+
+fn apply_player_preset(
+    schemas: &'static crate::fields::VersionedSchemas,
+    player: &mut PlayerRecord,
+    addr: u64,
+    preset: PlayerPreset,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let raw = &mut player.raw;
+    match preset {
+        PlayerPreset::Heal => {
+            set_u16_value(schemas, raw, addr, "p_fitness", 10000, edits);
+            set_u16_value(schemas, raw, addr, "p_sharpness", 10000, edits);
+            set_u16_value(schemas, raw, addr, "p_fatigue", 0, edits);
+            set_attr_value(schemas, raw, addr, "injury_proneness", 1, edits);
+            set_attr_value(schemas, raw, addr, "natural_fitness", 20, edits);
+            set_attr_value(schemas, raw, addr, "stamina", 20, edits);
+        }
+        PlayerPreset::Inspire => {
+            set_attr_value(schemas, raw, addr, "p_morale", 20, edits);
+            for k in [
+                "determination",
+                "p_adaptability",
+                "p_ambition",
+                "p_loyalty",
+                "p_pressure",
+                "p_professionalism",
+                "p_sportsmanship",
+                "p_temperament",
+            ] {
+                set_attr_value(schemas, raw, addr, k, 20, edits);
+            }
+            set_attr_value(schemas, raw, addr, "p_controversy", 1, edits);
+        }
+        PlayerPreset::Destroy => {
+            set_u16_value(schemas, raw, addr, "p_fitness", 1000, edits);
+            set_u16_value(schemas, raw, addr, "p_sharpness", 1000, edits);
+            set_u16_value(schemas, raw, addr, "p_fatigue", 9000, edits);
+            set_attr_value(schemas, raw, addr, "p_morale", 1, edits);
+            for k in ["stamina", "pace", "acceleration", "natural_fitness", "strength", "concentration"] {
+                set_attr_value(schemas, raw, addr, k, 1, edits);
+            }
+        }
+        PlayerPreset::RemoveBans => {
+            set_attr_value(schemas, raw, addr, "p_dirtiness", 1, edits);
+            set_attr_value(schemas, raw, addr, "p_controversy", 1, edits);
+            set_attr_value(schemas, raw, addr, "p_temperament", 20, edits);
+        }
+        PlayerPreset::RegisterUefa => {
+            if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                if let Some(off) = schemas.offset_of("p_squad_status") {
+                    if let Some(&old) = cr.get(off) {
+                        if old != 1 {
+                            cr[off] = 1;
+                            edits.push(FieldEdit {
+                                addr: caddr + off as u64,
+                                old_raw: vec![old],
+                                new_raw: vec![1],
+                                description: "Register for UEFA (Squad Status \u{2192} Star Player)".into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        PlayerPreset::RemoveIntWithdrawal => {
+            set_attr_value(schemas, raw, addr, "p_ambition", 20, edits);
+            set_attr_value(schemas, raw, addr, "p_loyalty", 20, edits);
+            set_attr_value(schemas, raw, addr, "p_morale", 20, edits);
+        }
+        PlayerPreset::TrainedAtClub | PlayerPreset::TrainedAtNation => {
+            set_attr_value(schemas, raw, addr, "p_loyalty", 20, edits);
+            set_attr_value(schemas, raw, addr, "p_adaptability", 20, edits);
+        }
+        PlayerPreset::CreateHistoryPoint => {
+            if let Some(ca) = schemas.offset_of("p_ca").and_then(|o| raw.get(o).copied()) {
+                edits.push(FieldEdit {
+                    addr: addr + schemas.offset_of("p_ca").unwrap() as u64,
+                    old_raw: vec![ca],
+                    new_raw: vec![ca],
+                    description: "History snapshot point".into(),
+                });
+            }
+        }
+        PlayerPreset::ImproveTeamCohesion => {
+            for k in ["teamwork", "work_rate", "leadership", "p_loyalty", "p_sportsmanship", "p_morale"] {
+                set_attr_value(schemas, raw, addr, k, 20, edits);
+            }
+        }
+        PlayerPreset::TacticalUnderstanding => {
+            for k in [
+                "decisions",
+                "positioning",
+                "off_the_ball",
+                "anticipation",
+                "teamwork",
+                "vision",
+                "concentration",
+                "p_versatility",
+            ] {
+                set_attr_value(schemas, raw, addr, k, 20, edits);
+            }
+        }
+        PlayerPreset::AllInOne => {
+            apply_player_preset(schemas, player, addr, PlayerPreset::Heal, edits);
+            apply_player_preset(schemas, player, addr, PlayerPreset::Inspire, edits);
+            apply_player_preset(schemas, player, addr, PlayerPreset::TacticalUnderstanding, edits);
+            set_attr_value(schemas, &mut player.raw, addr, "consistency", 20, edits);
+            set_attr_value(schemas, &mut player.raw, addr, "important_matches", 20, edits);
+        }
+    }
+}
+
+fn show_move_to_club_card(
+    schemas: &'static crate::fields::VersionedSchemas,
+    ui: &mut egui::Ui,
+    player: &mut PlayerRecord,
+    addr: u64,
+    clubs: Option<&[crate::cache::CachedClub]>,
+    edits: &mut Vec<FieldEdit>,
+) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.strong("Move to club");
+        ui.separator();
+
+        let move_id = egui::Id::new(("move_club_draft", addr));
+        let mut draft = ui
+            .data(|d| d.get_temp::<MoveClubDraft>(move_id))
+            .unwrap_or_default();
+
+        egui::Grid::new(("move_to_club_grid", addr))
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("Move");
+                ui.label(player.name.as_deref().unwrap_or("Unknown"));
+                ui.end_row();
+
+                ui.label("From");
+                ui.label(player.club_name.as_deref().unwrap_or("Free Agent"));
+                ui.end_row();
+
+                ui.label("To");
+                ui.horizontal(|ui| {
+                    ui.label("🔍");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.search_query)
+                            .hint_text("Search club...")
+                            .desired_width(130.0),
+                    );
+                });
+                ui.end_row();
+
+                ui.label("On Loan");
+                ui.checkbox(&mut draft.on_loan, "");
+                ui.end_row();
+            });
+
+        if let Some(club_list) = clubs {
+            let query = draft.search_query.trim().to_lowercase();
+            if !query.is_empty() {
+                egui::ScrollArea::vertical()
+                    .id_salt(("move_club_results", addr))
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        for c in club_list
+                            .iter()
+                            .filter(|c| c.name.to_lowercase().contains(&query))
+                            .take(25)
+                        {
+                            let is_sel = draft.selected_club_addr == Some(c.addr);
+                            if ui.selectable_label(is_sel, &c.name).clicked() {
+                                draft.selected_club_addr = Some(c.addr);
+                                draft.selected_club_name = c.name.clone();
+                                draft.search_query = c.name.clone();
+                            }
+                        }
+                    });
+            }
+        }
+
+        if let Some(target_addr) = draft.selected_club_addr {
+            if ui
+                .add_enabled(
+                    crate::ui::navigation::editing_enabled(ui),
+                    egui::Button::new(format!("➡ Move to {}", draft.selected_club_name)),
+                )
+                .clicked()
+            {
+                if let Some(off) = schemas.offset_of("p_club_ptr") {
+                    if off + 8 <= player.raw.len() {
+                        let old_bytes = player.raw[off..off + 8].to_vec();
+                        let new_bytes = target_addr.to_le_bytes().to_vec();
+                        player.raw[off..off + 8].copy_from_slice(&new_bytes);
+                        edits.push(FieldEdit {
+                            addr: addr + off as u64,
+                            old_raw: old_bytes,
+                            new_raw: new_bytes,
+                            description: format!(
+                                "Move {} to {}{}",
+                                player.name.as_deref().unwrap_or("Player"),
+                                draft.selected_club_name,
+                                if draft.on_loan { " (On Loan)" } else { "" }
+                            ),
+                        });
+                    }
+                }
+                if draft.on_loan {
+                    if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                        if let Some(off) = schemas.offset_of("p_squad_status") {
+                            if let Some(&old) = cr.get(off) {
+                                cr[off] = 24; // Out On Loan
+                                edits.push(FieldEdit {
+                                    addr: caddr + off as u64,
+                                    old_raw: vec![old],
+                                    new_raw: vec![24],
+                                    description: "Squad Status \u{2192} Out On Loan".into(),
+                                });
+                            }
+                        }
+                    }
+                }
+                player.club_addr = Some(target_addr);
+                player.club_name = Some(draft.selected_club_name.clone());
+            }
+        }
+
+        ui.data_mut(|d| d.insert_temp(move_id, draft));
+    });
+}
+
+fn render_highlighted_attr(
+    ui: &mut egui::Ui,
+    field: &fields::Field,
+    role: &RoleProfile,
+    raw: &mut [u8],
+    addr: u64,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let bg = if role.key_attrs.contains(&field.key) {
+        Some(egui::Color32::from_rgba_unmultiplied(46, 125, 50, 55))
+    } else if role.pref_attrs.contains(&field.key) {
+        Some(egui::Color32::from_rgba_unmultiplied(30, 100, 180, 55))
+    } else if LOWER_IS_BETTER.contains(&field.key) {
+        Some(egui::Color32::from_rgba_unmultiplied(140, 45, 60, 45))
+    } else {
+        None
+    };
+
+    if let Some(fill) = bg {
+        egui::Frame::default()
+            .fill(fill)
+            .inner_margin(2.0)
+            .show(ui, |ui| {
+                if let Some(e) = field_widget::render_field(ui, field, raw, addr) {
+                    edits.push(e);
+                }
+            });
+    } else if let Some(e) = field_widget::render_field(ui, field, raw, addr) {
+        edits.push(e);
+    }
+}
+
+fn set_attr_value(
+    schemas: &'static crate::fields::VersionedSchemas,
+    raw: &mut [u8],
+    entity_addr: u64,
+    key: &str,
+    target_displayed: u8,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let Some(field) = schemas.field(key) else { return };
+    let Some(loc) = field.offset.as_ref() else { return };
+    let offset = loc.offset() as usize;
+    if offset >= raw.len() {
+        return;
+    }
+    let old_raw = raw[offset];
+    let old_displayed = loc.decode_u8(old_raw).clamp(1, 20);
+    let new_displayed = target_displayed.clamp(1, 20);
+    if new_displayed == old_displayed {
+        return;
+    }
+    let new_raw = loc.encode_u8(new_displayed);
+    raw[offset] = new_raw;
+    edits.push(FieldEdit {
+        addr: entity_addr + offset as u64,
+        old_raw: vec![old_raw],
+        new_raw: vec![new_raw],
+        description: format!("{}: {} \u{2192} {}", field.label, old_displayed, new_displayed),
+    });
+}
+
+fn shift_attr_value(
+    schemas: &'static crate::fields::VersionedSchemas,
+    raw: &mut [u8],
+    entity_addr: u64,
+    key: &str,
+    delta: i8,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let Some(field) = schemas.field(key) else { return };
+    let Some(loc) = field.offset.as_ref() else { return };
+    let offset = loc.offset() as usize;
+    if offset >= raw.len() {
+        return;
+    }
+    let old_raw = raw[offset];
+    let old_displayed = loc.decode_u8(old_raw).clamp(1, 20);
+    let new_displayed = (old_displayed as i16 + delta as i16).clamp(1, 20) as u8;
+    if new_displayed == old_displayed {
+        return;
+    }
+    let new_raw = loc.encode_u8(new_displayed);
+    raw[offset] = new_raw;
+    edits.push(FieldEdit {
+        addr: entity_addr + offset as u64,
+        old_raw: vec![old_raw],
+        new_raw: vec![new_raw],
+        description: format!("{}: {} \u{2192} {}", field.label, old_displayed, new_displayed),
+    });
+}
+
+fn set_u16_value(
+    schemas: &'static crate::fields::VersionedSchemas,
+    raw: &mut [u8],
+    entity_addr: u64,
+    key: &str,
+    target: u16,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let Some(field) = schemas.field(key) else { return };
+    let Some(loc) = field.offset.as_ref() else { return };
+    let offset = loc.offset() as usize;
+    if offset + 1 >= raw.len() {
+        return;
+    }
+    let old_bytes = [raw[offset], raw[offset + 1]];
+    let old_val = u16::from_le_bytes(old_bytes);
+    if old_val == target {
+        return;
+    }
+    let new_bytes = target.to_le_bytes();
+    raw[offset..offset + 2].copy_from_slice(&new_bytes);
+    edits.push(FieldEdit {
+        addr: entity_addr + offset as u64,
+        old_raw: old_bytes.to_vec(),
+        new_raw: new_bytes.to_vec(),
+        description: format!("{}: {} \u{2192} {}", field.label, old_val, target),
+    });
+}
+
+fn set_raw_u8_value(
+    schemas: &'static crate::fields::VersionedSchemas,
+    raw: &mut [u8],
+    entity_addr: u64,
+    key: &str,
+    target: u8,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let Some(field) = schemas.field(key) else { return };
+    let Some(loc) = field.offset.as_ref() else { return };
+    let offset = loc.offset() as usize;
+    if offset >= raw.len() {
+        return;
+    }
+    let old_val = raw[offset];
+    if old_val == target {
+        return;
+    }
+    raw[offset] = target;
+    edits.push(FieldEdit {
+        addr: entity_addr + offset as u64,
+        old_raw: vec![old_val],
+        new_raw: vec![target],
+        description: format!("{}: {} \u{2192} {}", field.label, old_val, target),
+    });
+}
+
+fn recommended_ca(player: &PlayerRecord) -> u8 {
+    let pos_ratings = ratings::all_position_ratings(player);
+    let best_pos_rating = pos_ratings.iter().map(|(_, _, _, r)| *r).max().unwrap_or(50) as u16;
+    ((best_pos_rating * 2).saturating_sub(2)).clamp(1, 200) as u8
+}
+
+fn editable_pair_row(
+    schemas: &'static crate::fields::VersionedSchemas,
+    ui: &mut egui::Ui,
+    label: &str,
+    key1: &str,
+    key2: &str,
+    raw: &mut [u8],
+    addr: u64,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let (Some(f1), Some(f2)) = (schemas.field(key1), schemas.field(key2)) else {
+        return;
+    };
+    let (Some(loc1), Some(loc2)) = (f1.offset.as_ref(), f2.offset.as_ref()) else {
+        return;
+    };
+    let (off1, off2) = (loc1.offset() as usize, loc2.offset() as usize);
+    if off1 >= raw.len() || off2 >= raw.len() {
+        return;
+    }
+
+    let enabled = crate::ui::navigation::editing_enabled(ui);
+    ui.horizontal(|ui| {
+        ui.label(label);
+        edit_int_slot(ui, enabled, f1.label, loc1.encoding(), off1, raw, addr, edits);
+        ui.label("/");
+        edit_int_slot(ui, enabled, f2.label, loc2.encoding(), off2, raw, addr, edits);
+    });
+}
+
+fn edit_int_slot(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    label: &str,
+    encoding: fields::Encoding,
+    offset: usize,
+    raw: &mut [u8],
+    addr: u64,
+    edits: &mut Vec<FieldEdit>,
+) {
+    match encoding {
+        fields::Encoding::Direct => {
+            let old = raw[offset];
+            let mut val = old as i32;
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::DragValue::new(&mut val).range(0..=255).speed(0.5),
+                )
+                .changed()
+                && enabled
+            {
+                let new_val = val.clamp(0, 255) as u8;
+                if new_val != old {
+                    raw[offset] = new_val;
+                    edits.push(FieldEdit {
+                        addr: addr + offset as u64,
+                        old_raw: vec![old],
+                        new_raw: vec![new_val],
+                        description: format!("{label}: {old} \u{2192} {new_val}"),
+                    });
+                }
+            }
+        }
+        fields::Encoding::Raw | fields::Encoding::RawCapped(_) if offset + 1 < raw.len() => {
+            let old_bytes = [raw[offset], raw[offset + 1]];
+            let old = u16::from_le_bytes(old_bytes);
+            let mut val = old as i32;
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::DragValue::new(&mut val).range(0..=999).speed(0.5),
+                )
+                .changed()
+                && enabled
+            {
+                let new_val = val.clamp(0, 999) as u16;
+                if new_val != old {
+                    let new_bytes = new_val.to_le_bytes();
+                    raw[offset..offset + 2].copy_from_slice(&new_bytes);
+                    edits.push(FieldEdit {
+                        addr: addr + offset as u64,
+                        old_raw: old_bytes.to_vec(),
+                        new_raw: new_bytes.to_vec(),
+                        description: format!("{label}: {old} \u{2192} {new_val}"),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn editable_foot_row(
+    schemas: &'static crate::fields::VersionedSchemas,
+    ui: &mut egui::Ui,
+    raw: &mut [u8],
+    addr: u64,
+    edits: &mut Vec<FieldEdit>,
+) {
+    let (Some(lf), Some(rf)) = (schemas.field("left_foot"), schemas.field("right_foot")) else {
+        return;
+    };
+    let (Some(loc_l), Some(loc_r)) = (lf.offset.as_ref(), rf.offset.as_ref()) else {
+        return;
+    };
+    let (off_l, off_r) = (loc_l.offset() as usize, loc_r.offset() as usize);
+    if off_l >= raw.len() || off_r >= raw.len() {
+        return;
+    }
+
+    let enabled = crate::ui::navigation::editing_enabled(ui);
+    ui.horizontal(|ui| {
+        ui.label("Left Foot / Right Foot");
+        for (field, loc, off) in [(lf, loc_l, off_l), (rf, loc_r, off_r)] {
+            let old_raw = raw[off];
+            let disp = loc.decode_u8(old_raw).clamp(1, 20);
+            let mut val = disp as i32;
+            let color = field_widget::attr_color(disp, ui);
+            ui.visuals_mut().override_text_color = Some(color);
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::DragValue::new(&mut val).range(1..=20).speed(0.2),
+                )
+                .changed()
+                && enabled
+            {
+                let new_disp = val.clamp(1, 20) as u8;
+                if new_disp != disp {
+                    let new_raw = loc.encode_u8(new_disp);
+                    raw[off] = new_raw;
+                    edits.push(FieldEdit {
+                        addr: addr + off as u64,
+                        old_raw: vec![old_raw],
+                        new_raw: vec![new_raw],
+                        description: format!("{}: {} \u{2192} {}", field.label, disp, new_disp),
+                    });
+                }
+            }
+            ui.visuals_mut().override_text_color = None;
+        }
+    });
+}
+
+fn skin_tone_color(tone: u8) -> egui::Color32 {
+    let t = (tone.min(19) as f32) / 19.0;
+    let r = (252.0 - t * 185.0) as u8;
+    let g = (226.0 - t * 178.0) as u8;
+    let b = (196.0 - t * 158.0) as u8;
+    egui::Color32::from_rgb(r, g, b)
 }
 
 // ---------------------------------------------------------------------------
@@ -539,105 +1912,143 @@ fn show_contract(
     schemas: &'static crate::fields::VersionedSchemas,
     ui: &mut egui::Ui,
     player: &mut PlayerRecord,
+    clubs: Option<&[crate::cache::CachedClub]>,
     edits: &mut Vec<FieldEdit>,
 ) {
-    ui.strong("Contract");
+    let addr = player.addr;
+    ui.horizontal_top(|ui| {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(340.0);
+            ui.strong("Contract");
+            ui.separator();
 
-    // Contract fields live in the contract sub-record: edit its bytes and
-    // address. Asking price is in the player struct itself.
-    if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
-        if let Some(f) = schemas.field("p_contract_wage") {
-            edits.extend(field_widget::raw_u32_edit(ui, &f, cr, caddr));
-        }
-        if let Some(f) = schemas.field("p_contract_expiry") {
-            edits.extend(field_widget::date_edit(
-                ui,
-                "Expiry",
-                cr,
-                &f,
-                caddr,
-                2000..=2060,
-            ));
-        }
-        if let Some(f) = schemas.field("p_squad_status") {
-            let code = schemas
-                .offset_of("p_squad_status")
-                .and_then(|o| cr.get(o).copied());
-            match code {
-                // FM's own statuses (Out On Loan, ...) are shown, not offered.
-                Some(c) if !SQUAD_STATUS_OFFERED.iter().any(|(o, _)| *o == c) => {
-                    let name =
-                        squad_status_name(c).map_or(format!("code {c}"), |n| format!("{n} ({c})"));
-                    field_widget::info_label(ui, "Squad Status", name);
+            if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                if let Some(f) = schemas.field("p_contract_wage") {
+                    edits.extend(field_widget::raw_u32_edit(ui, &f, cr, caddr));
                 }
-                _ => edits.extend(field_widget::choice_u8_edit(
-                    ui,
-                    "Squad Status",
-                    cr,
-                    &f,
-                    caddr,
-                    SQUAD_STATUS_OFFERED,
-                )),
+                if let Some(f) = schemas.field("p_contract_expiry") {
+                    edits.extend(field_widget::date_edit(
+                        ui,
+                        "Expiry",
+                        cr,
+                        &f,
+                        caddr,
+                        2000..=2060,
+                    ));
+                }
+                if let Some(f) = schemas.field("p_squad_status") {
+                    let code = schemas
+                        .offset_of("p_squad_status")
+                        .and_then(|o| cr.get(o).copied());
+                    match code {
+                        Some(c) if !SQUAD_STATUS_OFFERED.iter().any(|(o, _)| *o == c) => {
+                            let name = squad_status_name(c)
+                                .map_or(format!("code {c}"), |n| format!("{n} ({c})"));
+                            field_widget::info_label(ui, "Squad Status", name);
+                        }
+                        _ => edits.extend(field_widget::choice_u8_edit(
+                            ui,
+                            "Squad Status",
+                            cr,
+                            &f,
+                            caddr,
+                            SQUAD_STATUS_OFFERED,
+                        )),
+                    }
+                }
+                if let Some(f) = schemas.field("p_squad_number") {
+                    edits.extend(field_widget::optional_u8_edit(
+                        ui,
+                        "Squad Number",
+                        cr,
+                        &f,
+                        caddr,
+                        99,
+                        255,
+                    ));
+                }
+                if let Some(off) = schemas.offset_of("p_list_flags") {
+                    if let Some(&flags) = cr.get(off) {
+                        let enabled = crate::ui::navigation::editing_enabled(ui);
+                        let mut transfer_listed = (flags & 1) != 0;
+                        let mut loan_listed = (flags & 2) != 0;
+                        let mut new_flags = flags;
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                egui::Checkbox::new(&mut transfer_listed, "Transfer Listed"),
+                            )
+                            .changed()
+                        {
+                            if transfer_listed {
+                                new_flags |= 1;
+                            } else {
+                                new_flags &= !1;
+                            }
+                        }
+                        if ui
+                            .add_enabled(
+                                enabled,
+                                egui::Checkbox::new(&mut loan_listed, "Loan Listed"),
+                            )
+                            .changed()
+                        {
+                            if loan_listed {
+                                new_flags |= 2;
+                            } else {
+                                new_flags &= !2;
+                            }
+                        }
+                        if new_flags != flags && enabled {
+                            cr[off] = new_flags;
+                            edits.push(FieldEdit {
+                                addr: caddr + off as u64,
+                                old_raw: vec![flags],
+                                new_raw: vec![new_flags],
+                                description: format!("Listing Flags: {flags} \u{2192} {new_flags}"),
+                            });
+                        }
+                    }
+                }
+                if let Some(s) = schemas
+                    .offset_of("p_contract_signed")
+                    .and_then(|o| fmt_date_at(cr, o))
+                {
+                    field_widget::info_label(ui, "Signed", s);
+                }
+            } else {
+                ui.label("Contract sub-record unavailable.");
             }
-        }
-        if let Some(f) = schemas.field("p_squad_number") {
-            edits.extend(field_widget::optional_u8_edit(
-                ui,
-                "Squad Number",
-                cr,
-                &f,
-                caddr,
-                99,
-                255,
-            ));
-        }
-        if let Some(flags) = schemas
-            .offset_of("p_list_flags")
-            .and_then(|o| cr.get(o).copied())
-        {
-            let status = match (flags & 1 != 0, flags & 2 != 0) {
-                (true, true) => "Transfer and loan listed",
-                (true, false) => "Transfer listed",
-                (false, true) => "Loan listed",
-                (false, false) => "Not listed",
-            };
-            field_widget::info_label(ui, "Listing (read-only)", status);
-        }
-        if let Some(s) = schemas
-            .offset_of("p_contract_signed")
-            .and_then(|o| fmt_date_at(cr, o))
-        {
-            field_widget::info_label(ui, "Signed", s);
-        }
-    } else {
-        ui.label("Contract sub-record unavailable.");
-    }
-    if let Some(f) = schemas.field("p_asking_price") {
-        let addr = player.addr;
-        edits.extend(field_widget::optional_money_edit(
-            ui,
-            "Asking Price",
-            &mut player.raw,
-            &f,
-            addr,
-        ));
-    }
+            if let Some(f) = schemas.field("p_asking_price") {
+                edits.extend(field_widget::optional_money_edit(
+                    ui,
+                    "Asking Price",
+                    &mut player.raw,
+                    &f,
+                    addr,
+                ));
+            }
 
-    ui.add_space(4.0);
+            ui.add_space(4.0);
 
-    if let Some(apps) = player.field_u16("p_senior_apps") {
-        field_widget::info_label(ui, "Senior Apps", apps);
-    }
+            if let Some(apps) = player.field_u16("p_senior_apps") {
+                field_widget::info_label(ui, "Senior Apps", apps);
+            }
 
-    for (key, label) in [
-        ("p_contract_start", "Contract Start"),
-        ("p_join_date", "Joined Club"),
-        ("p_debut_date", "Senior Debut"),
-    ] {
-        if let Some(s) = fmt_date_field(schemas, &player.raw, key) {
-            field_widget::info_label(ui, label, s);
-        }
-    }
+            for (key, label) in [
+                ("p_contract_start", "Contract Start"),
+                ("p_join_date", "Joined Club"),
+                ("p_debut_date", "Senior Debut"),
+            ] {
+                if let Some(s) = fmt_date_field(schemas, &player.raw, key) {
+                    field_widget::info_label(ui, label, s);
+                }
+            }
+        });
+
+        ui.add_space(12.0);
+        show_move_to_club_card(schemas, ui, player, addr, clubs, edits);
+    });
 }
 
 /// Squad statuses offered for editing: one code per distinct label. Codes
@@ -678,6 +2089,61 @@ const ETHNICITIES: &[(u8, &str)] = &[
     (8, "Native Australian"),
     (9, "Mixed Race"),
     (10, "East Asian"),
+];
+
+const HAIR_COLOURS: &[(u8, &str)] = &[
+    (0, "Black"),
+    (1, "Dark Brown 1"),
+    (2, "Dark Brown 2"),
+    (3, "Dark Brown 3"),
+    (4, "Brown 1"),
+    (5, "Brown 2"),
+    (6, "Light Brown 1"),
+    (7, "Light Brown 2"),
+    (8, "Blonde 1"),
+    (9, "Blonde 2"),
+    (10, "Blonde 3"),
+    (11, "Red 1"),
+    (12, "Red 2"),
+    (13, "Grey 1"),
+    (14, "Grey 2"),
+    (15, "White"),
+    (16, "Bald"),
+    (17, "Dyed"),
+    (18, "Other"),
+];
+
+const HAIR_LENGTHS: &[(u8, &str)] = &[
+    (0, "Bald"),
+    (1, "Buzzcut"),
+    (2, "Short"),
+    (3, "Medium"),
+    (4, "Long"),
+    (5, "Curly"),
+    (6, "Braids"),
+];
+
+const SKIN_TONES: &[(u8, &str)] = &[
+    (0, "Skin Tone 1"),
+    (1, "Skin Tone 2"),
+    (2, "Skin Tone 3"),
+    (3, "Skin Tone 4"),
+    (4, "Skin Tone 5"),
+    (5, "Skin Tone 6"),
+    (6, "Skin Tone 7"),
+    (7, "Skin Tone 8"),
+    (8, "Skin Tone 9"),
+    (9, "Skin Tone 10"),
+    (10, "Skin Tone 11"),
+    (11, "Skin Tone 12"),
+    (12, "Skin Tone 13"),
+    (13, "Skin Tone 14"),
+    (14, "Skin Tone 15"),
+    (15, "Skin Tone 16"),
+    (16, "Skin Tone 17"),
+    (17, "Skin Tone 18"),
+    (18, "Skin Tone 19"),
+    (19, "Skin Tone 20"),
 ];
 
 /// FM's label for a squad-status code (contract "agreed playing time").
@@ -905,5 +2371,49 @@ mod tests {
         // Day word 7019 = flags | day 363 → 29 Dec 2025.
         let buf = [7019u16.to_le_bytes(), 2025u16.to_le_bytes()].concat();
         assert_eq!(fmt_date_at(&buf, 0).as_deref(), Some("29 Dec 2025"));
+    }
+
+    #[test]
+    fn set_and_shift_attr_values_emit_field_edits() {
+        let schemas = crate::game_version::GameBuild::Fm24Steam.schemas();
+        let mut raw = vec![0u8; schemas.player_struct_size];
+        let mut edits = Vec::new();
+        set_attr_value(schemas, &mut raw, 0x1000, "finishing", 15, &mut edits);
+        assert_eq!(edits.len(), 1);
+        let fin_loc = schemas.field("finishing").unwrap().offset.unwrap();
+        assert_eq!(fin_loc.decode_u8(raw[fin_loc.offset() as usize]), 15);
+
+        shift_attr_value(schemas, &mut raw, 0x1000, "finishing", 2, &mut edits);
+        assert_eq!(edits.len(), 2);
+        assert_eq!(fin_loc.decode_u8(raw[fin_loc.offset() as usize]), 17);
+    }
+
+    #[test]
+    fn wonderkid_and_presets_update_player_attributes() {
+        let build = crate::game_version::GameBuild::Fm24Steam;
+        let schemas = build.schemas();
+        let mut player = PlayerRecord {
+            build,
+            addr: 0x3000,
+            index: 0,
+            name: Some("Test Player".into()),
+            raw: vec![0u8; schemas.player_struct_size],
+            person_shift: 0,
+            contract_raw: None,
+            contract_addr: None,
+            club_name: None,
+            club_addr: None,
+            nationality: None,
+            birthplace: None,
+        };
+        let mut edits = Vec::new();
+        apply_wonderkid(schemas, &mut player.raw, 0x3000, &ROLE_PROFILES[0], &mut edits);
+        assert!(!edits.is_empty());
+        assert_eq!(player.raw[schemas.offset_of("p_pa").unwrap()], 195);
+
+        edits.clear();
+        apply_player_preset(schemas, &mut player, 0x3000, PlayerPreset::Heal, &mut edits);
+        assert!(!edits.is_empty());
+        assert_eq!(player.field_u16("p_fitness"), Some(10000));
     }
 }

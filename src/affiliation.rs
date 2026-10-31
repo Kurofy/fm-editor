@@ -270,3 +270,4 @@ mod tests {
         assert!(!b.has(FriendshipBenefits::PLAYERS_MOVE_FREELY));
     }
 }
+

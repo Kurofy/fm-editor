@@ -63,11 +63,12 @@ the `home_stadium` sub-record, so `rva_stadium_base` is 0.
     30 Jun 2025 #17); squad status 1 (Star Player) for the four stars. Squad
     number edited and undone in game on Cristian Romero (#17, Tottenham).
     Wage values (Kane 361,779, Romero 175,000) are not yet checked in game.
-- Leads read but not yet confirmed in game: condition u16 0x1F8 and sharpness
-  u16 0x1F4 (0..10000), morale u16 0x25E, jadedness i16 0x1F6, weight u16
-  0x14C (Kane 86, Messi 67, Ronaldo 84, De Bruyne 68, Ward 68), asking price i32
-  0x1D4 (-1 = none), looks 0x309..0x30C, traits 0x368. Cristian Romero
-  (Tottenham) is consistent with FM's condition popup: condition 10000 "Peak",
+- Mapped in `src/fields/fm24/player.rs`: condition/fitness u16 `0x1F8` and sharpness
+  u16 `0x1F4` (0..10000), morale u8 `0x25E`, jadedness/fatigue i16 `0x1F6`, weight u16
+  `0x14C` (Kane 86, Messi 67, Ronaldo 84, De Bruyne 68, Ward 68), asking price i32
+  `0x1D4` (-1 = none), appearance `0x309..0x30C` (`p_ethnicity`, `p_hair_colour`,
+  `p_hair_length`, `p_skin_tone`), traits u64 `0x368`, and contract listing flags `+0x4F`.
+  Cristian Romero (Tottenham) is consistent with FM's condition popup: condition 10000 "Peak",
   sharpness 5100 "Needs match practice", jadedness -125 "Fresh" (one witness).
 
 ## Staff (vs FM26)
