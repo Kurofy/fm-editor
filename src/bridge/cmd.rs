@@ -72,6 +72,8 @@ pub struct ClubView {
     /// Official/alternative stadium name (`st_name2`), e.g. "City of
     /// Manchester Stadium" for the Etihad. Null for most stadiums.
     pub stadium_name2: Option<String>,
+    /// Affiliated and feeder clubs.
+    pub affiliations: Vec<crate::affiliation::AffiliationView>,
 }
 
 impl ClubView {

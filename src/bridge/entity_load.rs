@@ -162,6 +162,8 @@ pub(super) fn load_club_view(fm: &FmProcess, addr: u64, index: usize) -> Result<
     let stadium_name = stadium_string("st_name");
     let stadium_name2 = stadium_string("st_name2");
 
+    let affiliations = load_club_affiliations(fm, addr, uid);
+
     Ok(ClubView {
         addr,
         index,
@@ -182,6 +184,7 @@ pub(super) fn load_club_view(fm: &FmProcess, addr: u64, index: usize) -> Result<
         stadium_name,
         stadium_name2,
         stadium_entity_raw,
+        affiliations,
     })
 }
 
@@ -195,6 +198,114 @@ fn read_sub_bytes(
     let ptr = ptr?;
     let size = sub_records.iter().find(|s| s.id == id)?.size;
     fm.read_bytes(ptr, size).ok()
+}
+
+fn load_club_affiliations(
+    fm: &FmProcess,
+    club_addr: u64,
+    club_uid: u32,
+) -> Vec<crate::affiliation::AffiliationView> {
+    use crate::affiliation::{AffiliationType, AffiliationView, FriendshipBenefits};
+
+    const VEC_OFFSETS: &[u64] = &[0x30, 0x48, 0x60, 0x78, 0x90, 0xA8, 0x18];
+
+    for &vec_off in VEC_OFFSETS {
+        let Ok(begin) = fm.read_u64(club_addr + vec_off) else { continue };
+        let Ok(end) = fm.read_u64(club_addr + vec_off + 8) else { continue };
+
+        if !(begin > 0x10000 && begin < 0x7FFFFFFFFFFF && end >= begin && end < 0x7FFFFFFFFFFF) {
+            continue;
+        }
+
+        let bytes = end - begin;
+        if bytes == 0 || bytes % 8 != 0 || bytes > 64 * 8 {
+            continue;
+        }
+
+        let count = (bytes / 8) as usize;
+        let mut results = Vec::new();
+
+        for i in 0..count {
+            let Ok(item_ptr) = fm.read_u64(begin + (i as u64) * 8) else { break };
+            if !(item_ptr > 0x10000 && item_ptr < 0x7FFFFFFFFFFF) {
+                break;
+            }
+
+            let Ok(raw) = fm.read_bytes(item_ptr, 0x40) else { break };
+
+            let ptr1 = u64::from_le_bytes(raw[0x08..0x10].try_into().unwrap());
+            let ptr2 = u64::from_le_bytes(raw[0x10..0x18].try_into().unwrap());
+
+            let links_to_club = ptr1 == club_addr || ptr2 == club_addr;
+            if !links_to_club && ptr1 < 0x10000 && ptr2 < 0x10000 {
+                continue;
+            }
+
+            let resolve_name = |ptr: u64| -> String {
+                if ptr > 0x10000 && ptr < 0x7FFFFFFFFFFF {
+                    if let Ok(name_ptr) = fm.read_u64(ptr + 0xC0) {
+                        if let Ok(name) = fm.read_fm_name(name_ptr) {
+                            if !name.trim().is_empty() {
+                                return name;
+                            }
+                        }
+                    }
+                }
+                "Club".to_string()
+            };
+
+            let parent_name = if ptr1 == club_addr {
+                "Parent Club".to_string()
+            } else {
+                resolve_name(ptr1)
+            };
+
+            let feeder_name = if ptr2 == club_addr {
+                "Feeder Club".to_string()
+            } else {
+                resolve_name(ptr2)
+            };
+
+            let start_doy = u16::from_le_bytes(raw[0x18..0x1A].try_into().unwrap());
+            let start_year = u16::from_le_bytes(raw[0x1A..0x1C].try_into().unwrap());
+            let end_doy = u16::from_le_bytes(raw[0x1C..0x1E].try_into().unwrap());
+            let end_year = u16::from_le_bytes(raw[0x1E..0x20].try_into().unwrap());
+            let type_val = u32::from_le_bytes(raw[0x20..0x24].try_into().unwrap());
+            let annual_fee = i32::from_le_bytes(raw[0x24..0x28].try_into().unwrap());
+            let friendly_chance = raw[0x28];
+            let max_loaned = raw[0x29];
+            let wage_percentage = raw[0x2A];
+            let flags = u32::from_le_bytes(raw[0x2C..0x30].try_into().unwrap());
+
+            results.push(AffiliationView {
+                addr: item_ptr,
+                parent_club_uid: club_uid,
+                parent_club_name: parent_name,
+                feeder_club_uid: 0,
+                feeder_club_name: feeder_name,
+                start_doy: if start_doy == 0 { 205 } else { start_doy },
+                start_year: if start_year == 0 { 2023 } else { start_year },
+                end_doy: if end_doy == 0 { 1 } else { end_doy },
+                end_year: if end_year == 0 { 1900 } else { end_year },
+                affiliation_type: AffiliationType::from_u32(type_val),
+                annual_fee,
+                friendly_chance_enabled: friendly_chance > 0,
+                friendly_chance: friendly_chance.min(100),
+                max_loaned_enabled: max_loaned > 0,
+                max_loaned,
+                wage_percentage_enabled: wage_percentage > 0,
+                wage_percentage: wage_percentage.min(100),
+                benefits: FriendshipBenefits { flags },
+                raw,
+            });
+        }
+
+        if !results.is_empty() {
+            return results;
+        }
+    }
+
+    Vec::new()
 }
 
 /// Read a u32 club field from live process memory — used by search hot path

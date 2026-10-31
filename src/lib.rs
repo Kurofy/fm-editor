@@ -5,6 +5,7 @@
 //! Everything that needs version-aware schemas, process attachment, or
 //! field lookups lives here so it has exactly one implementation.
 
+pub mod affiliation;
 pub mod app;
 pub mod best_xi;
 pub mod bridge;
