@@ -379,16 +379,18 @@ fn show_affiliations(
         return;
     }
 
-    let selected_idx_id = ui.make_persistent_id("club_aff_selected");
+    let selected_idx_id = ui.make_persistent_id(("club_aff_selected", club.addr));
     let mut selected_idx = ui.data(|d| d.get_temp::<usize>(selected_idx_id)).unwrap_or(0);
     if selected_idx >= club.affiliations.len() {
         selected_idx = club.affiliations.len().saturating_sub(1);
     }
 
     ui.horizontal_top(|ui| {
-        // Left Column: Affiliations List
+        // ===================================================================
+        // Left Column: Affiliations List (~340px)
+        // ===================================================================
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(320.0);
+            ui.set_width(340.0);
             ui.horizontal(|ui| {
                 ui.strong("Teams");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -398,29 +400,36 @@ fn show_affiliations(
             ui.separator();
 
             let mut to_remove = None;
-            for (i, aff) in club.affiliations.iter().enumerate() {
-                let is_selected = i == selected_idx;
-                let display_name = if aff.parent_club_name.eq_ignore_ascii_case(&club.full_name)
-                    || aff.parent_club_name.eq_ignore_ascii_case(&club.short_name)
-                    || aff.parent_club_name == "Parent Club"
-                {
-                    &aff.feeder_club_name
-                } else if aff.feeder_club_name.eq_ignore_ascii_case(&club.full_name)
-                    || aff.feeder_club_name.eq_ignore_ascii_case(&club.short_name)
-                    || aff.feeder_club_name == "Feeder Club"
-                {
-                    &aff.parent_club_name
-                } else {
-                    &aff.feeder_club_name
-                };
+            egui::ScrollArea::vertical()
+                .id_salt(("aff_list_scroll", club.addr))
+                .max_height(460.0)
+                .show(ui, |ui| {
+                    for (i, aff) in club.affiliations.iter().enumerate() {
+                        let is_selected = i == selected_idx;
+                        let display_name = if aff.parent_club_name.eq_ignore_ascii_case(&club.full_name)
+                            || aff.parent_club_name.eq_ignore_ascii_case(&club.short_name)
+                            || aff.parent_club_name == "Parent Club"
+                        {
+                            &aff.feeder_club_name
+                        } else if aff.feeder_club_name.eq_ignore_ascii_case(&club.full_name)
+                            || aff.feeder_club_name.eq_ignore_ascii_case(&club.short_name)
+                            || aff.feeder_club_name == "Feeder Club"
+                        {
+                            &aff.parent_club_name
+                        } else {
+                            &aff.feeder_club_name
+                        };
 
-                let label_text = format!("{:<20}  {}", display_name, aff.affiliation_type.label());
-                let resp = ui.selectable_label(is_selected, label_text);
-                if resp.clicked() {
-                    selected_idx = i;
-                    ui.data_mut(|d| d.insert_temp(selected_idx_id, selected_idx));
-                }
-            }
+                        let row_resp = ui.selectable_label(
+                            is_selected,
+                            format!("{:<22}  {}", display_name, aff.affiliation_type.label()),
+                        );
+                        if row_resp.clicked() {
+                            selected_idx = i;
+                            ui.data_mut(|d| d.insert_temp(selected_idx_id, selected_idx));
+                        }
+                    }
+                });
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -446,19 +455,24 @@ fn show_affiliations(
             }
         });
 
-        ui.add_space(12.0);
+        ui.add_space(14.0);
 
-        // Right Column: Details of Selected Affiliation
+        // ===================================================================
+        // Right Column: Details of Selected Affiliation (~500px)
+        // ===================================================================
         if let Some(aff) = club.affiliations.get_mut(selected_idx) {
             ui.vertical(|ui| {
+                ui.set_width(500.0);
+
                 // Card 1: Information
                 egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(500.0);
                     ui.strong("Information");
                     ui.separator();
 
-                    egui::Grid::new("aff_info_grid")
+                    egui::Grid::new(("aff_info_grid", club.addr, selected_idx))
                         .num_columns(2)
-                        .spacing([12.0, 6.0])
+                        .spacing([14.0, 6.0])
                         .show(ui, |ui| {
                             // Parent Club
                             ui.label("Parent Club");
@@ -554,7 +568,7 @@ fn show_affiliations(
 
                             // Affiliation Type
                             ui.label("Affiliation Type");
-                            egui::ComboBox::from_id_salt("aff_type_combo")
+                            egui::ComboBox::from_id_salt(("aff_type_combo", club.addr, selected_idx))
                                 .selected_text(aff.affiliation_type.label())
                                 .show_ui(ui, |ui| {
                                     for &t in crate::affiliation::AffiliationType::ALL {
@@ -643,7 +657,7 @@ fn show_affiliations(
                             ui.end_row();
 
                             // Maximum No. Players Loaned
-                            ui.label("Maximum No. Players Loaned");
+                            ui.label("Max Players Loaned");
                             ui.horizontal(|ui| {
                                 let mut enabled = aff.max_loaned_enabled;
                                 if ui.checkbox(&mut enabled, "").changed() {
@@ -668,7 +682,7 @@ fn show_affiliations(
                             ui.end_row();
 
                             // Percentage of loan player wage paid by parent club
-                            ui.label("Percentage of loan player wage paid by parent club");
+                            ui.label("Wage % Paid by Parent");
                             ui.horizontal(|ui| {
                                 let mut enabled = aff.wage_percentage_enabled;
                                 if ui.checkbox(&mut enabled, "").changed() {
@@ -696,44 +710,67 @@ fn show_affiliations(
 
                 ui.add_space(8.0);
 
-                // Card 2: Friendship Benefits
+                // Card 2: Friendship Benefits (2-column Grid, never collides)
                 egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(500.0);
                     ui.strong("Friendship Benefits");
                     ui.separator();
 
                     use crate::affiliation::FriendshipBenefits;
 
-                    let col1_benefits = [
-                        ("Players Move Freely", FriendshipBenefits::PLAYERS_MOVE_FREELY),
-                        ("First Option To Buy", FriendshipBenefits::FIRST_OPTION_TO_BUY),
-                        ("Youth Players Training", FriendshipBenefits::YOUTH_PLAYERS_TRAINING),
-                        ("Same Board", FriendshipBenefits::SAME_BOARD),
-                        ("Help With Facilities", FriendshipBenefits::HELP_WITH_FACILITIES),
-                        ("Marketing Relations", FriendshipBenefits::MARKETING_RELATIONS),
-                        ("Cannot Play In Same Division", FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION),
-                        ("Loan Players from Sub Team", FriendshipBenefits::LOAN_PLAYERS_FROM_SUB_TEAM),
-                        ("Uses Same Kit", FriendshipBenefits::USES_SAME_KIT),
+                    let benefit_pairs: &[((&str, u32), Option<(&str, u32)>)] = &[
+                        (
+                            ("Players Move Freely", FriendshipBenefits::PLAYERS_MOVE_FREELY),
+                            Some(("Players Go On Loan", FriendshipBenefits::PLAYERS_GO_ON_LOAN)),
+                        ),
+                        (
+                            ("First Option To Buy", FriendshipBenefits::FIRST_OPTION_TO_BUY),
+                            Some(("Play Friendlies", FriendshipBenefits::PLAY_FRIENDLIES)),
+                        ),
+                        (
+                            ("Youth Players Training", FriendshipBenefits::YOUTH_PLAYERS_TRAINING),
+                            Some(("Permanent Deal", FriendshipBenefits::PERMANENT_DEAL)),
+                        ),
+                        (
+                            ("Same Board", FriendshipBenefits::SAME_BOARD),
+                            Some(("Financial Help", FriendshipBenefits::FINANCIAL_HELP)),
+                        ),
+                        (
+                            ("Help With Facilities", FriendshipBenefits::HELP_WITH_FACILITIES),
+                            Some(("Renewable", FriendshipBenefits::RENEWABLE)),
+                        ),
+                        (
+                            ("Marketing Relations", FriendshipBenefits::MARKETING_RELATIONS),
+                            Some(("Scouting Knowledge Shared", FriendshipBenefits::SCOUTING_KNOWLEDGE_SHARED)),
+                        ),
+                        (
+                            ("Cannot Play In Same Division", FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION),
+                            Some(("Uses All Parent Facilities", FriendshipBenefits::USES_ALL_PARENT_FACILITIES)),
+                        ),
+                        (
+                            ("Loan Players from Sub Team", FriendshipBenefits::LOAN_PLAYERS_FROM_SUB_TEAM),
+                            Some(("Uses Sub Team Training", FriendshipBenefits::USES_SUB_TEAM_TRAINING)),
+                        ),
+                        (
+                            ("Uses Same Kit", FriendshipBenefits::USES_SAME_KIT),
+                            None,
+                        ),
                     ];
 
-                    let col2_benefits = [
-                        ("Players Go On Loan", FriendshipBenefits::PLAYERS_GO_ON_LOAN),
-                        ("Play Friendlies", FriendshipBenefits::PLAY_FRIENDLIES),
-                        ("Permanent Deal", FriendshipBenefits::PERMANENT_DEAL),
-                        ("Financial Help", FriendshipBenefits::FINANCIAL_HELP),
-                        ("Renewable", FriendshipBenefits::RENEWABLE),
-                        ("Scouting Knowledge Shared", FriendshipBenefits::SCOUTING_KNOWLEDGE_SHARED),
-                        ("Uses All Parent Club Facilities", FriendshipBenefits::USES_ALL_PARENT_FACILITIES),
-                        ("Uses sub team training", FriendshipBenefits::USES_SUB_TEAM_TRAINING),
-                    ];
-
-                    ui.columns(2, |cols| {
-                        for (label, flag) in col1_benefits {
-                            benefit_checkbox(&mut cols[0], aff, label, flag, edits);
-                        }
-                        for (label, flag) in col2_benefits {
-                            benefit_checkbox(&mut cols[1], aff, label, flag, edits);
-                        }
-                    });
+                    egui::Grid::new(("aff_benefits_grid", club.addr, selected_idx))
+                        .num_columns(2)
+                        .spacing([24.0, 4.0])
+                        .show(ui, |ui| {
+                            for &((label1, flag1), opt_col2) in benefit_pairs {
+                                benefit_checkbox(ui, aff, label1, flag1, edits);
+                                if let Some((label2, flag2)) = opt_col2 {
+                                    benefit_checkbox(ui, aff, label2, flag2, edits);
+                                } else {
+                                    ui.label("");
+                                }
+                                ui.end_row();
+                            }
+                        });
                 });
             });
         }

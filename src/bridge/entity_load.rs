@@ -79,7 +79,12 @@ pub(super) fn load_staff_extras(fm: &FmProcess, base: u64) -> StaffExtras {
     }
 }
 
-pub(super) fn load_club_view(fm: &FmProcess, addr: u64, index: usize) -> Result<ClubView, String> {
+pub(super) fn load_club_view(
+    fm: &FmProcess,
+    addr: u64,
+    index: usize,
+    cached_clubs: Option<&[crate::cache::CachedClub]>,
+) -> Result<ClubView, String> {
     let schema = fm.schemas();
     let raw = fm.read_bytes(addr, schema.club_read_size)?;
 
@@ -162,7 +167,7 @@ pub(super) fn load_club_view(fm: &FmProcess, addr: u64, index: usize) -> Result<
     let stadium_name = stadium_string("st_name");
     let stadium_name2 = stadium_string("st_name2");
 
-    let affiliations = load_club_affiliations(fm, addr, uid, &full_name, info_addr);
+    let affiliations = load_club_affiliations(fm, addr, uid, &full_name, info_addr, cached_clubs);
 
     Ok(ClubView {
         addr,
@@ -206,6 +211,7 @@ fn load_club_affiliations(
     club_uid: u32,
     club_name: &str,
     info_addr: Option<u64>,
+    cached_clubs: Option<&[crate::cache::CachedClub]>,
 ) -> Vec<crate::affiliation::AffiliationView> {
     use crate::affiliation::{AffiliationType, AffiliationView, FriendshipBenefits};
     use std::collections::HashSet;
@@ -214,22 +220,35 @@ fn load_club_affiliations(
     let mut seen_names = HashSet::new();
     seen_names.insert(club_name.trim().to_lowercase());
 
-    let get_club_name_and_uid = |ptr: u64| -> Option<(String, u32)> {
+    // Helper: find club name and uid given an address (club or team)
+    let resolve_club = |ptr: u64| -> Option<(String, u32, u64)> {
         if !(ptr > 0x10000 && ptr < 0x7FFFFFFFFFFF) {
             return None;
         }
-        // Direct club: UID at +0x0C, name at +0xC0 or +0xC8
+        // Check cached_clubs first
+        if let Some(list) = cached_clubs {
+            if let Some(c) = list.iter().find(|c| c.addr == ptr || c.senior_team_addr == Some(ptr)) {
+                return Some((c.name.clone(), c.uid, c.addr));
+            }
+            // Check if team+0x30 points to club
+            if let Ok(cptr) = fm.read_u64(ptr + 0x30) {
+                if let Some(c) = list.iter().find(|c| c.addr == cptr) {
+                    return Some((c.name.clone(), c.uid, c.addr));
+                }
+            }
+        }
+        // Fallback: direct memory read of name
         if let Ok(uid) = fm.read_u32(ptr + 0x0C) {
             let np_res = fm.read_u64(ptr + 0xC0).or_else(|_| fm.read_u64(ptr + 0xC8));
             if let Ok(name_ptr) = np_res {
                 if let Ok(name) = fm.read_fm_name(name_ptr) {
                     if !name.trim().is_empty() {
-                        return Some((name, uid));
+                        return Some((name, uid, ptr));
                     }
                 }
             }
         }
-        // Team object: team+0x30 points to club
+        // Fallback: team+0x30
         if let Ok(cptr) = fm.read_u64(ptr + 0x30) {
             if cptr > 0x10000 && cptr < 0x7FFFFFFFFFFF && cptr != ptr {
                 if let Ok(uid) = fm.read_u32(cptr + 0x0C) {
@@ -237,7 +256,7 @@ fn load_club_affiliations(
                     if let Ok(name_ptr) = np_res {
                         if let Ok(name) = fm.read_fm_name(name_ptr) {
                             if !name.trim().is_empty() {
-                                return Some((name, uid));
+                                return Some((name, uid, cptr));
                             }
                         }
                     }
@@ -247,13 +266,16 @@ fn load_club_affiliations(
         None
     };
 
-    let mut vec_sources = vec![(club_addr, vec![0x18u64, 0x20, 0x30, 0x38, 0x48, 0x60, 0x78, 0x90, 0xA8])];
+    // Vector scan ranges:
+    // 1. Club struct vectors: check every 8-byte boundary from 0x18 to 0x160
+    // 2. Info struct vectors: check every 8-byte boundary from 0x00 to 0x130
+    let mut vec_bases = vec![(club_addr, 0x18u64..0x160u64)];
     if let Some(ia) = info_addr {
-        vec_sources.push((ia, vec![0x18u64, 0x30, 0x48, 0x60, 0x78, 0x90, 0xA8, 0xC0]));
+        vec_bases.push((ia, 0x00u64..0x130u64));
     }
 
-    for (base, offsets) in vec_sources {
-        for vec_off in offsets {
+    for (base, range) in vec_bases {
+        for vec_off in range.step_by(8) {
             let Ok(begin) = fm.read_u64(base + vec_off) else { continue };
             let Ok(end) = fm.read_u64(base + vec_off + 8) else { continue };
 
@@ -262,7 +284,7 @@ fn load_club_affiliations(
             }
 
             let bytes = end - begin;
-            if bytes == 0 || bytes % 8 != 0 || bytes > 64 * 8 {
+            if bytes == 0 || bytes % 8 != 0 || bytes > 128 * 8 {
                 continue;
             }
 
@@ -273,43 +295,41 @@ fn load_club_affiliations(
                     break;
                 }
 
-                // Case 1: item_ptr points directly to an affiliated Club or Team
-                if let Some((target_name, target_uid)) = get_club_name_and_uid(item_ptr) {
+                // Try direct match (Club or Team)
+                if let Some((target_name, target_uid, target_addr)) = resolve_club(item_ptr) {
+                    if target_addr == club_addr || target_uid == club_uid {
+                        continue;
+                    }
                     let key = target_name.trim().to_lowercase();
                     if !seen_names.contains(&key) {
                         seen_names.insert(key);
 
-                        let (aff_type, benefits_flags) = if target_name.ends_with(" B")
+                        let is_b_club = target_name.ends_with(" B")
                             || target_name.contains(" B ")
                             || target_name.contains(" B-")
                             || target_name.ends_with(" II")
-                        {
-                            (
-                                AffiliationType::BClub,
-                                FriendshipBenefits::PLAYERS_MOVE_FREELY
-                                    | FriendshipBenefits::SAME_BOARD
-                                    | FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION
-                                    | FriendshipBenefits::PLAY_FRIENDLIES
-                                    | FriendshipBenefits::PERMANENT_DEAL
-                                    | FriendshipBenefits::USES_ALL_PARENT_FACILITIES,
-                            )
-                        } else if target_name.to_lowercase().contains("women")
-                            || target_name.to_lowercase().contains("femin")
-                        {
-                            (
-                                AffiliationType::WomensClub,
-                                FriendshipBenefits::SAME_BOARD | FriendshipBenefits::PERMANENT_DEAL,
-                            )
-                        } else if target_name == "Liverpool" || target_name == "FC Cincinnati" {
-                            (
-                                AffiliationType::GoodRelations,
-                                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                            )
+                            || target_name.ends_with(" Reserves");
+
+                        let is_womens = target_name.to_lowercase().contains("women")
+                            || target_name.to_lowercase().contains("femin");
+
+                        let aff_type = if is_b_club {
+                            AffiliationType::BClub
+                        } else if is_womens {
+                            AffiliationType::WomensClub
                         } else {
-                            (
-                                AffiliationType::Normal,
-                                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                            )
+                            AffiliationType::Normal
+                        };
+
+                        let benefits_flags = if is_b_club {
+                            FriendshipBenefits::PLAYERS_MOVE_FREELY
+                                | FriendshipBenefits::SAME_BOARD
+                                | FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION
+                                | FriendshipBenefits::PLAY_FRIENDLIES
+                                | FriendshipBenefits::PERMANENT_DEAL
+                                | FriendshipBenefits::USES_ALL_PARENT_FACILITIES
+                        } else {
+                            FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL
                         };
 
                         results.push(AffiliationView {
@@ -328,8 +348,8 @@ fn load_club_affiliations(
                             friendly_chance: 50,
                             max_loaned_enabled: false,
                             max_loaned: 0,
-                            wage_percentage_enabled: aff_type == AffiliationType::BClub,
-                            wage_percentage: if aff_type == AffiliationType::BClub { 100 } else { 0 },
+                            wage_percentage_enabled: is_b_club,
+                            wage_percentage: if is_b_club { 100 } else { 0 },
                             benefits: FriendshipBenefits { flags: benefits_flags },
                             raw: Vec::new(),
                         });
@@ -337,163 +357,79 @@ fn load_club_affiliations(
                     }
                 }
 
-                // Case 2: item_ptr is an AffiliationRecord composite struct
+                // Try Affiliation composite record (reads up to 64 bytes)
                 let Ok(raw) = fm.read_bytes(item_ptr, 0x40) else { continue };
-                let ptr1 = u64::from_le_bytes(raw[0x08..0x10].try_into().unwrap());
-                let ptr2 = u64::from_le_bytes(raw[0x10..0x18].try_into().unwrap());
-
-                let other_ptr = if ptr1 == club_addr || fm.read_u64(ptr1.wrapping_add(0x30)).ok() == Some(club_addr) {
-                    ptr2
-                } else if ptr2 == club_addr || fm.read_u64(ptr2.wrapping_add(0x30)).ok() == Some(club_addr) {
-                    ptr1
-                } else {
-                    0
-                };
-
-                if other_ptr > 0x10000 && other_ptr < 0x7FFFFFFFFFFF {
-                    if let Some((other_name, other_uid)) = get_club_name_and_uid(other_ptr) {
-                        let key = other_name.trim().to_lowercase();
-                        if !seen_names.contains(&key) {
-                            seen_names.insert(key);
-
-                            let start_doy = u16::from_le_bytes(raw[0x18..0x1A].try_into().unwrap());
-                            let start_year = u16::from_le_bytes(raw[0x1A..0x1C].try_into().unwrap());
-                            let end_doy = u16::from_le_bytes(raw[0x1C..0x1E].try_into().unwrap());
-                            let end_year = u16::from_le_bytes(raw[0x1E..0x20].try_into().unwrap());
-                            let type_val = u32::from_le_bytes(raw[0x20..0x24].try_into().unwrap());
-                            let annual_fee = i32::from_le_bytes(raw[0x24..0x28].try_into().unwrap());
-                            let friendly_chance = raw[0x28];
-                            let max_loaned = raw[0x29];
-                            let wage_percentage = raw[0x2A];
-                            let flags = u32::from_le_bytes(raw[0x2C..0x30].try_into().unwrap());
-
-                            results.push(AffiliationView {
-                                addr: item_ptr,
-                                parent_club_uid: club_uid,
-                                parent_club_name: club_name.to_string(),
-                                feeder_club_uid: other_uid,
-                                feeder_club_name: other_name,
-                                start_doy: if start_doy == 0 { 205 } else { start_doy },
-                                start_year: if start_year == 0 { 2022 } else { start_year },
-                                end_doy: if end_doy == 0 { 1 } else { end_doy },
-                                end_year: if end_year == 0 { 1900 } else { end_year },
-                                affiliation_type: AffiliationType::from_u32(type_val),
-                                annual_fee,
-                                friendly_chance_enabled: friendly_chance > 0,
-                                friendly_chance: friendly_chance.min(100),
-                                max_loaned_enabled: max_loaned > 0,
-                                max_loaned,
-                                wage_percentage_enabled: wage_percentage > 0,
-                                wage_percentage: wage_percentage.min(100),
-                                benefits: FriendshipBenefits { flags },
-                                raw,
-                            });
+                // Scan any 8-byte pointer in the first 0x28 bytes of raw
+                let mut found_other = None;
+                for p_off in (0..0x28).step_by(8) {
+                    if p_off + 8 <= raw.len() {
+                        let candidate_ptr = u64::from_le_bytes(raw[p_off..p_off + 8].try_into().unwrap());
+                        if let Some((other_name, other_uid, other_addr)) = resolve_club(candidate_ptr) {
+                            if other_addr != club_addr && other_uid != club_uid {
+                                found_other = Some((other_name, other_uid, other_addr));
+                                break;
+                            }
                         }
                     }
                 }
-            }
-        }
-    }
 
-    // Default known database affiliations for FC Porto (matching the user's game screenshot)
-    let is_porto = club_uid == 1478 || club_name.to_lowercase().contains("porto");
-    if is_porto {
-        let porto_defaults: &[(&str, AffiliationType, u32, u8, u8)] = &[
-            (
-                "FC Porto B",
-                AffiliationType::BClub,
-                FriendshipBenefits::PLAYERS_MOVE_FREELY
-                    | FriendshipBenefits::SAME_BOARD
-                    | FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION
-                    | FriendshipBenefits::PLAY_FRIENDLIES
-                    | FriendshipBenefits::PERMANENT_DEAL
-                    | FriendshipBenefits::USES_ALL_PARENT_FACILITIES,
-                50,
-                100,
-            ),
-            (
-                "Associação Black Bulls",
-                AffiliationType::Normal,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "Portimonense Sporting Clube SAD",
-                AffiliationType::Normal,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "Academia de Futebol Demba Sanó",
-                AffiliationType::Normal,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "Liverpool",
-                AffiliationType::GoodRelations,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "Coimbra Sports SAF",
-                AffiliationType::Normal,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "FC Cincinnati",
-                AffiliationType::GoodRelations,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "PAEE Keryneias",
-                AffiliationType::GoodRelations,
-                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL,
-                50,
-                0,
-            ),
-            (
-                "Futebol Clube do Porto",
-                AffiliationType::WomensClub,
-                FriendshipBenefits::SAME_BOARD | FriendshipBenefits::PERMANENT_DEAL,
-                0,
-                0,
-            ),
-        ];
+                if let Some((other_name, other_uid, _other_addr)) = found_other {
+                    let key = other_name.trim().to_lowercase();
+                    if !seen_names.contains(&key) {
+                        seen_names.insert(key);
 
-        for &(name, aff_type, benefits, friendly, wage) in porto_defaults {
-            let key = name.trim().to_lowercase();
-            if !seen_names.contains(&key) {
-                seen_names.insert(key);
-                results.push(AffiliationView {
-                    addr: 0,
-                    parent_club_uid: club_uid,
-                    parent_club_name: club_name.to_string(),
-                    feeder_club_uid: 0,
-                    feeder_club_name: name.to_string(),
-                    start_doy: 205,
-                    start_year: 2022,
-                    end_doy: 1,
-                    end_year: 1900,
-                    affiliation_type: aff_type,
-                    annual_fee: 0,
-                    friendly_chance_enabled: friendly > 0,
-                    friendly_chance: friendly,
-                    max_loaned_enabled: false,
-                    max_loaned: 0,
-                    wage_percentage_enabled: wage > 0,
-                    wage_percentage: wage,
-                    benefits: FriendshipBenefits { flags: benefits },
-                    raw: Vec::new(),
-                });
+                        let start_doy = u16::from_le_bytes(raw[0x18..0x1A].try_into().unwrap_or([0, 0]));
+                        let start_year = u16::from_le_bytes(raw[0x1A..0x1C].try_into().unwrap_or([0, 0]));
+                        let end_doy = u16::from_le_bytes(raw[0x1C..0x1E].try_into().unwrap_or([0, 0]));
+                        let end_year = u16::from_le_bytes(raw[0x1E..0x20].try_into().unwrap_or([0, 0]));
+                        let type_val = u32::from_le_bytes(raw[0x20..0x24].try_into().unwrap_or([0, 0, 0, 0]));
+                        let annual_fee = i32::from_le_bytes(raw[0x24..0x28].try_into().unwrap_or([0, 0, 0, 0]));
+                        let friendly_chance = raw.get(0x28).copied().unwrap_or(0);
+                        let max_loaned = raw.get(0x29).copied().unwrap_or(0);
+                        let wage_percentage = raw.get(0x2A).copied().unwrap_or(0);
+                        let flags = u32::from_le_bytes(raw[0x2C..0x30].try_into().unwrap_or([0, 0, 0, 0]));
+
+                        let is_b_club = other_name.ends_with(" B") || other_name.contains(" B ") || other_name.ends_with(" II");
+                        let aff_type = if type_val > 0 {
+                            AffiliationType::from_u32(type_val)
+                        } else if is_b_club {
+                            AffiliationType::BClub
+                        } else {
+                            AffiliationType::Normal
+                        };
+
+                        results.push(AffiliationView {
+                            addr: item_ptr,
+                            parent_club_uid: club_uid,
+                            parent_club_name: club_name.to_string(),
+                            feeder_club_uid: other_uid,
+                            feeder_club_name: other_name,
+                            start_doy: if start_doy == 0 { 205 } else { start_doy },
+                            start_year: if start_year == 0 { 2022 } else { start_year },
+                            end_doy: if end_doy == 0 { 1 } else { end_doy },
+                            end_year: if end_year == 0 { 1900 } else { end_year },
+                            affiliation_type: aff_type,
+                            annual_fee,
+                            friendly_chance_enabled: friendly_chance > 0,
+                            friendly_chance: friendly_chance.min(100),
+                            max_loaned_enabled: max_loaned > 0,
+                            max_loaned,
+                            wage_percentage_enabled: wage_percentage > 0 || is_b_club,
+                            wage_percentage: if wage_percentage > 0 { wage_percentage.min(100) } else if is_b_club { 100 } else { 0 },
+                            benefits: FriendshipBenefits { flags: if flags != 0 { flags } else if is_b_club {
+                                FriendshipBenefits::PLAYERS_MOVE_FREELY
+                                    | FriendshipBenefits::SAME_BOARD
+                                    | FriendshipBenefits::CANNOT_PLAY_IN_SAME_DIVISION
+                                    | FriendshipBenefits::PLAY_FRIENDLIES
+                                    | FriendshipBenefits::PERMANENT_DEAL
+                                    | FriendshipBenefits::USES_ALL_PARENT_FACILITIES
+                            } else {
+                                FriendshipBenefits::PLAY_FRIENDLIES | FriendshipBenefits::PERMANENT_DEAL
+                            }},
+                            raw,
+                        });
+                    }
+                }
             }
         }
     }
