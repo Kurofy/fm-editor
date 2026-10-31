@@ -832,6 +832,33 @@ fn mirror_u8_edit(
 
 /// Editable money field (Balance, Budgets, Wages).
 /// Displays and edits in the chosen `Currency` and converts to/from base GBP in memory.
+#[derive(Clone, Default)]
+struct MoneyDraft {
+    text: String,
+    last_currency: crate::settings::Currency,
+    last_gbp: i64,
+}
+
+fn parse_money_input(text: &str) -> Option<i64> {
+    let clean = text.trim().replace([',', ' ', '.', '_'], "");
+    if clean.is_empty() {
+        return None;
+    }
+    let lower = clean.to_lowercase();
+    if let Some(num) = lower.strip_suffix('b') {
+        let f: f64 = num.parse().ok()?;
+        Some((f * 1_000_000_000.0) as i64)
+    } else if let Some(num) = lower.strip_suffix('m') {
+        let f: f64 = num.parse().ok()?;
+        Some((f * 1_000_000.0) as i64)
+    } else if let Some(num) = lower.strip_suffix('k') {
+        let f: f64 = num.parse().ok()?;
+        Some((f * 1_000.0) as i64)
+    } else {
+        clean.parse::<i64>().ok()
+    }
+}
+
 fn money_field_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -872,51 +899,59 @@ fn money_field_row(
         u32::from_le_bytes(old_bytes) as i64
     };
 
-    let mut curr_val = currency.from_gbp(old_gbp);
     let enabled = navigation::editing_enabled(ui);
-    let mut changed = false;
+    let draft_id = egui::Id::new(("club_money_draft", key, club.addr));
+    let mut draft = ui
+        .data(|d| d.get_temp::<MoneyDraft>(draft_id))
+        .unwrap_or_default();
+    if draft.last_currency != currency || draft.last_gbp != old_gbp || draft.text.is_empty() {
+        draft.text = currency.from_gbp(old_gbp).to_string();
+        draft.last_currency = currency;
+        draft.last_gbp = old_gbp;
+    }
 
-    let (range_min, range_max) = if is_balance {
-        (-2_000_000_000_000i64, 2_000_000_000_000i64)
-    } else {
-        (0i64, 2_000_000_000_000i64)
-    };
-
-    let speed = match currency {
-        crate::settings::Currency::Idr => {
-            if key == "c_wage_budget" { 100_000.0 } else { 1_000_000.0 }
-        }
-        _ => {
-            if key == "c_wage_budget" { 500.0 } else { 50_000.0 }
-        }
-    };
-
-    let prefix = format!("{} ", currency.symbol());
+    let mut apply_val: Option<i64> = None;
 
     ui.horizontal(|ui| {
         ui.add_sized([160.0, 22.0], egui::Label::new(label));
-        changed = ui
-            .add_enabled_ui(enabled, |ui| {
-                ui.add_sized(
-                    [150.0, 22.0],
-                    egui::DragValue::new(&mut curr_val)
-                        .prefix(prefix)
-                        .update_while_editing(false)
-                        .range(range_min..=range_max)
-                        .speed(speed),
-                )
-                .changed()
-            })
-            .inner;
+        ui.label(currency.symbol());
+        let text_res = ui.add_enabled(
+            enabled,
+            egui::TextEdit::singleline(&mut draft.text).desired_width(120.0),
+        );
+        if enabled && text_res.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if let Some(parsed) = parse_money_input(&draft.text) {
+                apply_val = Some(parsed);
+            }
+        }
+        if enabled && ui.small_button("Set").clicked() {
+            if let Some(parsed) = parse_money_input(&draft.text) {
+                apply_val = Some(parsed);
+            }
+        }
+        if enabled && (key == "c_transfer_budget" || key == "c_balance") {
+            let add_step = match currency {
+                crate::settings::Currency::Idr => 200_000_000_000i64,
+                _ => 10_000_000i64,
+            };
+            if ui.small_button(format!("+{}", currency.format_compact(add_step))).clicked() {
+                let current_curr = currency.from_gbp(old_gbp);
+                apply_val = Some(current_curr.saturating_add(add_step));
+            }
+            if ui.small_button(format!("+{}", currency.format_compact(add_step * 5))).clicked() {
+                let current_curr = currency.from_gbp(old_gbp);
+                apply_val = Some(current_curr.saturating_add(add_step * 5));
+            }
+        }
         ui.label(
-            egui::RichText::new(currency.format_amount(curr_val))
+            egui::RichText::new(format!("({} in-game)", currency.format_gbp(old_gbp)))
                 .weak()
                 .size(11.0),
         );
     });
 
     let mut row_edits = Vec::new();
-    if enabled && changed {
+    if let Some(curr_val) = apply_val {
         let new_gbp = currency.to_gbp(curr_val);
         let (min_gbp, max_gbp) = if is_balance {
             (i32::MIN as i64, i32::MAX as i64)
@@ -947,9 +982,13 @@ fn money_field_row(
                 currency,
                 &mut row_edits,
             );
+
+            draft.text = currency.from_gbp(new_gbp).to_string();
+            draft.last_gbp = new_gbp;
         }
     }
 
+    ui.data_mut(|d| d.insert_temp(draft_id, draft));
     Some(row_edits)
 }
 

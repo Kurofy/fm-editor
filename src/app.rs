@@ -568,6 +568,7 @@ impl FmEditorApp {
             if completion.was_undo {
                 self.set_status(format!("Undone: {}", completion.entry.description));
             } else {
+                self.set_status(format!("Saved: {}", completion.entry.description));
                 self.undo_stack.push(completion.entry);
             }
         } else {
@@ -1361,10 +1362,11 @@ impl eframe::App for FmEditorApp {
                                 if let Some(p) = self.selected_player.as_mut().filter(|p| p.addr == tab_addr) {
                                     let addr = p.addr;
                                     let clubs = self.entity_cache.as_deref().map(|c| c.clubs.as_slice());
+                                    let nations = self.entity_cache.as_deref().map(|c| c.nations.as_slice());
                                     let e = player_panel::show(
                                         schemas, ui, p, &mut self.player_tab, addr,
                                         wage_period, self.settings.currency, face_pack_path.as_deref(),
-                                        clubs,
+                                        clubs, nations,
                                     );
                                     edits.extend(e);
                                 } else {

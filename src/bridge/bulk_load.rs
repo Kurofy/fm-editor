@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc};
 
-use crate::cache::{CachedClub, CachedPlayer, CachedStaff, EntityCache};
+use crate::cache::{CachedClub, CachedNation, CachedPlayer, CachedStaff, EntityCache};
 use crate::process::FmProcess;
 
 use super::cmd::BridgeResult;
@@ -111,9 +111,11 @@ pub(super) fn load_entity_cache(
     let c_gender_off = schemas.offset_of("c_gender").map(|o| o as u64);
 
     // ------------------------------------------------------------------
-    // Phase 1 — players
+    // Phase 1 — players & nations discovery
     // ------------------------------------------------------------------
     let mut players = Vec::with_capacity(ac.humans_count);
+    let mut nations_map: HashMap<u64, String> = HashMap::new();
+    let nat_ptr_off = schemas.offset_of("p_nation_ptr");
 
     for i in 0..ac.humans_count {
         let ptr = fm.read_u64(ac.humans_data + i as u64 * 8).unwrap_or(0);
@@ -129,6 +131,20 @@ pub(super) fn load_entity_cache(
                 continue;
             }
         };
+
+        if let Some(off) = nat_ptr_off {
+            if off + 8 <= raw.len() {
+                let nat_ptr = read_u64_le(&raw, off);
+                if nat_ptr > 0x10000 && nat_ptr < 0x7FFFFFFFFFFF && !nations_map.contains_key(&nat_ptr) {
+                    if let Ok(name) = fm.read_fm_name(nat_ptr + 0x18) {
+                        let trimmed = name.trim().to_string();
+                        if !trimmed.is_empty() {
+                            nations_map.insert(nat_ptr, trimmed);
+                        }
+                    }
+                }
+            }
+        }
 
         let uid = read_u32_le(&raw, p_uid_off as usize);
         let ca = raw.get(p_ca_off as usize).copied().unwrap_or(0);
@@ -261,6 +277,17 @@ pub(super) fn load_entity_cache(
         }
 
         let transfer_budget = super::entity_load::read_club_field_u32(fm, ptr, "c_transfer_budget");
+        let senior_team_addr = crate::fields::resolve_sub_ptr(fm, ptr, "senior_team", schemas.club_sub_records)
+            .or_else(|| {
+                let teams_ptr = fm.read_u64(ptr + 0x18).ok()?;
+                if teams_ptr > 0x10000 && teams_ptr < 0x7FFFFFFFFFFF {
+                    let st = fm.read_u64(teams_ptr).ok()?;
+                    if st > 0x10000 && st < 0x7FFFFFFFFFFF {
+                        return Some(st);
+                    }
+                }
+                None
+            });
 
         clubs.push(CachedClub {
             addr: ptr,
@@ -269,6 +296,7 @@ pub(super) fn load_entity_cache(
             name,
             gender,
             transfer_budget,
+            senior_team_addr,
             nation_id: None,
             status: None,
             reputation: None,
@@ -311,11 +339,18 @@ pub(super) fn load_entity_cache(
     }
     let club_names: HashMap<u32, String> = clubs.iter().map(|c| (c.uid, c.name.clone())).collect();
 
+    let mut nations: Vec<CachedNation> = nations_map
+        .into_iter()
+        .map(|(addr, name)| CachedNation { name, addr })
+        .collect();
+    nations.sort_by(|a, b| a.name.cmp(&b.name));
+
     let my_clubs = load_my_clubs(fm, &clubs);
     Ok(Arc::new(EntityCache {
         players,
         staff,
         clubs,
+        nations,
         club_names,
         my_clubs,
     }))
@@ -438,6 +473,7 @@ mod membership_tests {
             name: uid.to_string(),
             gender: 0,
             transfer_budget: None,
+            senior_team_addr: None,
             nation_id: None,
             status: None,
             reputation: None,

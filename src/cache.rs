@@ -64,10 +64,18 @@ pub struct CachedClub {
     pub name: String,
     pub gender: u8,
     pub transfer_budget: Option<u32>,
+    /// Senior team address (e.g. club+0x18 -> [0]); required to move players to this club.
+    pub senior_team_addr: Option<u64>,
     // Unmapped list-column fields:
     pub nation_id: Option<u32>,
     pub status: Option<u8>,
     pub reputation: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CachedNation {
+    pub name: String,
+    pub addr: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +92,7 @@ pub struct EntityCache {
     pub players: Vec<CachedPlayer>,
     pub staff: Vec<CachedStaff>,
     pub clubs: Vec<CachedClub>,
+    pub nations: Vec<CachedNation>,
     /// uid → short name; built from `clubs` on cache completion.
     /// Used to display the Club column in player/staff list rows once
     /// club_id fields are mapped.

@@ -152,11 +152,13 @@ mod tests {
                     name: name.to_string(),
                     gender: 0,
                     transfer_budget: None,
+                    senior_team_addr: None,
                     nation_id: None,
                     status: None,
                     reputation: None,
                 })
                 .collect(),
+            nations: vec![],
             club_names: Default::default(),
         }
     }

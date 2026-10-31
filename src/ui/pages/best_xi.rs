@@ -299,6 +299,7 @@ mod tests {
                 players: vec![],
                 staff: vec![],
                 clubs: vec![],
+                nations: vec![],
                 club_names: Default::default(),
             })
         };
@@ -328,6 +329,7 @@ mod tests {
             players: vec![],
             staff: vec![],
             clubs: vec![],
+            nations: vec![],
             club_names: Default::default(),
         });
         let mut state = BestXiState::default();
@@ -359,6 +361,7 @@ mod tests {
             players: vec![],
             staff: vec![],
             clubs: vec![],
+            nations: vec![],
             club_names: Default::default(),
         };
         let lineup = Lineup {

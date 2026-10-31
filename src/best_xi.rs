@@ -402,6 +402,7 @@ mod tests {
             players,
             staff: vec![],
             clubs: vec![],
+            nations: vec![],
             club_names: Default::default(),
             my_clubs: Some(crate::cache::MyClubs {
                 club_ids: HashSet::from([42, 43]),

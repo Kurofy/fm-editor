@@ -203,6 +203,21 @@ impl Currency {
     pub fn format_gbp(self, gbp: i64) -> String {
         self.format_amount(self.from_gbp(gbp))
     }
+
+    /// Format an amount compactly with K / M / B suffix.
+    pub fn format_compact(self, amount: i64) -> String {
+        let abs = amount.unsigned_abs();
+        let prefix = self.symbol();
+        if abs >= 1_000_000_000 {
+            format!("{}{:.1}B", prefix, abs as f64 / 1_000_000_000.0)
+        } else if abs >= 1_000_000 {
+            format!("{}{:.0}M", prefix, abs as f64 / 1_000_000.0)
+        } else if abs >= 1_000 {
+            format!("{}{:.0}k", prefix, abs as f64 / 1_000.0)
+        } else {
+            format!("{}{}", prefix, abs)
+        }
+    }
 }
 
 pub fn format_with_commas(mut n: u64) -> String {

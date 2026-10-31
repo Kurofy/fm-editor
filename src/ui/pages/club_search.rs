@@ -261,6 +261,7 @@ mod tests {
             name: name.into(),
             gender: 0,
             transfer_budget: budget,
+            senior_team_addr: None,
             nation_id: None,
             status: None,
             reputation: None,
