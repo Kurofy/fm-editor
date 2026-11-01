@@ -283,22 +283,41 @@ pub(super) fn load_entity_cache(
         }
 
         let transfer_budget = super::entity_load::read_club_field_u32(fm, ptr, "c_transfer_budget");
-        let senior_team_addr = crate::fields::resolve_sub_ptr(fm, ptr, "senior_team", schemas.club_sub_records)
-            .or_else(|| {
-                let teams_ptr = fm.read_u64(ptr + 0x18).ok()?;
-                if teams_ptr > 0x10000 && teams_ptr < 0x7FFFFFFFFFFF {
-                    if fm.read_u64(teams_ptr + 0x30).ok() == Some(ptr) {
-                        return Some(teams_ptr);
-                    }
+        let mut senior_team_addr = None;
+        let mut b_team_addr = None;
+        let mut u19_team_addr = None;
+
+        if let Ok(teams_ptr) = fm.read_u64(ptr + 0x18) {
+            if teams_ptr > 0x10000 && teams_ptr < 0x7FFFFFFFFFFF {
+                if fm.read_u64(teams_ptr + 0x30).ok() == Some(ptr) {
+                    senior_team_addr = Some(teams_ptr);
+                } else {
                     if let Ok(st) = fm.read_u64(teams_ptr) {
-                        if st > 0x10000 && st < 0x7FFFFFFFFFFF {
-                            return Some(st);
+                        if st > 0x10000 && st < 0x7FFFFFFFFFFF && fm.read_u64(st + 0x30).ok() == Some(ptr) {
+                            senior_team_addr = Some(st);
                         }
                     }
-                    return Some(teams_ptr);
+                    if let Ok(bt) = fm.read_u64(teams_ptr + 8) {
+                        if bt > 0x10000 && bt < 0x7FFFFFFFFFFF && fm.read_u64(bt + 0x30).ok() == Some(ptr) {
+                            b_team_addr = Some(bt);
+                        }
+                    }
+                    if let Ok(ut) = fm.read_u64(teams_ptr + 16) {
+                        if ut > 0x10000 && ut < 0x7FFFFFFFFFFF && fm.read_u64(ut + 0x30).ok() == Some(ptr) {
+                            u19_team_addr = Some(ut);
+                        }
+                    }
                 }
-                None
-            });
+            }
+        }
+
+        if senior_team_addr.is_none() {
+            if let Some(st) = crate::fields::resolve_sub_ptr(fm, ptr, "senior_team", schemas.club_sub_records) {
+                if fm.read_u64(st + 0x30).ok() == Some(ptr) {
+                    senior_team_addr = Some(st);
+                }
+            }
+        }
 
         clubs.push(CachedClub {
             addr: ptr,
@@ -308,6 +327,8 @@ pub(super) fn load_entity_cache(
             gender,
             transfer_budget,
             senior_team_addr,
+            b_team_addr,
+            u19_team_addr,
             nation_id: None,
             status: None,
             reputation: None,
@@ -485,6 +506,8 @@ mod membership_tests {
             gender: 0,
             transfer_budget: None,
             senior_team_addr: None,
+            b_team_addr: None,
+            u19_team_addr: None,
             nation_id: None,
             status: None,
             reputation: None,

@@ -66,6 +66,10 @@ pub struct CachedClub {
     pub transfer_budget: Option<u32>,
     /// Senior team address (e.g. club+0x18 -> [0]); required to move players to this club.
     pub senior_team_addr: Option<u64>,
+    /// B team / Reserves address (e.g. club+0x18 -> [1]).
+    pub b_team_addr: Option<u64>,
+    /// U19 / Youth team address (e.g. club+0x18 -> [2]).
+    pub u19_team_addr: Option<u64>,
     // Unmapped list-column fields:
     pub nation_id: Option<u32>,
     pub status: Option<u8>,

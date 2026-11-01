@@ -262,6 +262,8 @@ mod tests {
             gender: 0,
             transfer_budget: budget,
             senior_team_addr: None,
+            b_team_addr: None,
+            u19_team_addr: None,
             nation_id: None,
             status: None,
             reputation: None,

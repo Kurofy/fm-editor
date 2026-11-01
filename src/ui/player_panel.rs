@@ -1225,156 +1225,162 @@ fn show_move_to_club_card(
 
         if let Some(target_addr) = draft.selected_club_addr {
             let target_club = clubs.and_then(|list| list.iter().find(|c| c.addr == target_addr));
-            let st_addr = target_club.and_then(|c| c.senior_team_addr).unwrap_or(target_addr);
 
-            let mut effective_club_addr = target_addr;
-            let mut effective_team_addr = st_addr;
-            let mut effective_club_name = draft.selected_club_name.clone();
-
-            if draft.selected_squad == SquadDestination::BTeam {
-                if let Some(list) = clubs {
-                    let b_candidates = [
-                        format!("{} B", draft.selected_club_name),
-                        format!("{} II", draft.selected_club_name),
-                        format!("{}-B", draft.selected_club_name),
-                        format!("{} Reserves", draft.selected_club_name),
-                    ];
-                    if let Some(b_club) = list.iter().find(|c| b_candidates.iter().any(|cand| c.name.eq_ignore_ascii_case(cand))) {
-                        effective_club_addr = b_club.addr;
-                        effective_club_name = b_club.name.clone();
-                        effective_team_addr = b_club.senior_team_addr.unwrap_or(b_club.addr);
-                    }
-                }
-            } else if draft.selected_squad == SquadDestination::U19 {
-                if let Some(list) = clubs {
-                    let u19_candidates = [
-                        format!("{} U19", draft.selected_club_name),
-                        format!("{} Under 19", draft.selected_club_name),
-                        format!("{} Youth", draft.selected_club_name),
-                        format!("{} Sub-19", draft.selected_club_name),
-                    ];
-                    if let Some(u_club) = list.iter().find(|c| u19_candidates.iter().any(|cand| c.name.eq_ignore_ascii_case(cand))) {
-                        effective_club_addr = u_club.addr;
-                        effective_club_name = u_club.name.clone();
-                        effective_team_addr = u_club.senior_team_addr.unwrap_or(u_club.addr);
-                    }
-                }
-            }
-
-            if ui
-                .add_enabled(
-                    crate::ui::navigation::editing_enabled(ui),
-                    egui::Button::new(format!("➡ Move to {} ({})", effective_club_name, draft.selected_squad.label())),
-                )
-                .clicked()
-            {
-                // 1. Write playing team pointer (0x0130 in FM24) so FM matches squad and tactics
-                if let Some(team_off) = schemas.offset_of("p_team_ptr") {
-                    if team_off + 8 <= player.raw.len() {
-                        let old_bytes = player.raw[team_off..team_off + 8].to_vec();
-                        let new_bytes = effective_team_addr.to_le_bytes().to_vec();
-                        player.raw[team_off..team_off + 8].copy_from_slice(&new_bytes);
-                        edits.push(FieldEdit {
-                            addr: addr + team_off as u64,
-                            old_raw: old_bytes,
-                            new_raw: new_bytes,
-                            description: format!(
-                                "Move {} playing team to {} ({})",
-                                player.name.as_deref().unwrap_or("Player"),
-                                effective_club_name,
-                                draft.selected_squad.label()
-                            ),
-                        });
-                    }
-                }
-
-                // 2. Write club pointer (0x03B0 in FM24)
-                if let Some(off) = schemas.offset_of("p_club_ptr") {
-                    if off + 8 <= player.raw.len() {
-                        let old_bytes = player.raw[off..off + 8].to_vec();
-                        let new_bytes = effective_club_addr.to_le_bytes().to_vec();
-                        player.raw[off..off + 8].copy_from_slice(&new_bytes);
-                        edits.push(FieldEdit {
-                            addr: addr + off as u64,
-                            old_raw: old_bytes,
-                            new_raw: new_bytes,
-                            description: format!(
-                                "Move {} club to {}{}",
-                                player.name.as_deref().unwrap_or("Player"),
-                                effective_club_name,
-                                if draft.on_loan { " (On Loan)" } else { "" }
-                            ),
-                        });
-                    }
-                }
-
-                // 3. Update contract record (at player+0x340 in FM24)
-                if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
-                    // 3a. Update contract owning club at contract+0x08 for permanent transfers
-                    if !draft.on_loan && cr.len() >= 0x10 {
-                        let old_owning = cr[0x08..0x10].to_vec();
-                        let new_owning = effective_club_addr.to_le_bytes().to_vec();
-                        if old_owning != new_owning {
-                            cr[0x08..0x10].copy_from_slice(&new_owning);
-                            edits.push(FieldEdit {
-                                addr: caddr + 0x08,
-                                old_raw: old_owning,
-                                new_raw: new_owning,
-                                description: format!("Contract owning club \u{2192} {}", effective_club_name),
-                            });
+            let effective_team_addr = match draft.selected_squad {
+                SquadDestination::Senior => target_club.and_then(|c| c.senior_team_addr),
+                SquadDestination::BTeam => {
+                    let mut b = target_club.and_then(|c| c.b_team_addr);
+                    if b.is_none() {
+                        if let Some(list) = clubs {
+                            let b_candidates = [
+                                format!("{} B", draft.selected_club_name),
+                                format!("{} II", draft.selected_club_name),
+                                format!("{}-B", draft.selected_club_name),
+                                format!("{} Reserves", draft.selected_club_name),
+                            ];
+                            if let Some(b_club) = list.iter().find(|c| b_candidates.iter().any(|cand| c.name.eq_ignore_ascii_case(cand))) {
+                                b = b_club.senior_team_addr;
+                            }
                         }
                     }
-
-                    // 3b. Update contract playing team at contract+0x10
-                    if cr.len() >= 0x18 {
-                        let old_team = cr[0x10..0x18].to_vec();
-                        let new_team = effective_team_addr.to_le_bytes().to_vec();
-                        if old_team != new_team {
-                            cr[0x10..0x18].copy_from_slice(&new_team);
-                            edits.push(FieldEdit {
-                                addr: caddr + 0x10,
-                                old_raw: old_team,
-                                new_raw: new_team,
-                                description: format!("Contract playing team \u{2192} {}", effective_club_name),
-                            });
+                    b.or_else(|| target_club.and_then(|c| c.senior_team_addr))
+                }
+                SquadDestination::U19 => {
+                    let mut u = target_club.and_then(|c| c.u19_team_addr);
+                    if u.is_none() {
+                        if let Some(list) = clubs {
+                            let u19_candidates = [
+                                format!("{} U19", draft.selected_club_name),
+                                format!("{} Under 19", draft.selected_club_name),
+                                format!("{} Youth", draft.selected_club_name),
+                                format!("{} Sub-19", draft.selected_club_name),
+                            ];
+                            if let Some(u_club) = list.iter().find(|c| u19_candidates.iter().any(|cand| c.name.eq_ignore_ascii_case(cand))) {
+                                u = u_club.senior_team_addr;
+                            }
                         }
                     }
+                    u.or_else(|| target_club.and_then(|c| c.senior_team_addr))
+                }
+            };
 
-                    // 3c. Update squad status (contract+0x4C)
-                    if let Some(off) = schemas.offset_of("p_squad_status") {
-                        if off < cr.len() {
-                            let old_status = cr[off];
-                            let new_status = if draft.on_loan {
-                                24 // Out on loan
-                            } else {
-                                match draft.selected_squad {
-                                    SquadDestination::Senior => 1, // Star Player / Regular
-                                    SquadDestination::BTeam => 7,  // Fringe Player / Reserves
-                                    SquadDestination::U19 => 11,   // Youngster
-                                }
-                            };
-                            if new_status != old_status {
-                                cr[off] = new_status;
+            let can_move = crate::ui::navigation::editing_enabled(ui) && effective_team_addr.is_some();
+            let button_text = if effective_team_addr.is_some() {
+                format!("➡ Move to {} ({})", draft.selected_club_name, draft.selected_squad.label())
+            } else {
+                format!("➡ Move to {} (Tim tidak tersedia)", draft.selected_club_name)
+            };
+
+            if ui.add_enabled(can_move, egui::Button::new(button_text)).clicked() {
+                if let Some(team_addr) = effective_team_addr {
+                    // 1. Write playing team pointer (0x0130 in FM24) so FM matches squad and tactics
+                    if let Some(team_off) = schemas.offset_of("p_team_ptr") {
+                        if team_off + 8 <= player.raw.len() {
+                            let old_bytes = player.raw[team_off..team_off + 8].to_vec();
+                            let new_bytes = team_addr.to_le_bytes().to_vec();
+                            if old_bytes != new_bytes {
+                                player.raw[team_off..team_off + 8].copy_from_slice(&new_bytes);
                                 edits.push(FieldEdit {
-                                    addr: caddr + off as u64,
-                                    old_raw: vec![old_status],
-                                    new_raw: vec![new_status],
-                                    description: format!("Squad Status \u{2192} code {new_status}"),
+                                    addr: addr + team_off as u64,
+                                    old_raw: old_bytes,
+                                    new_raw: new_bytes,
+                                    description: format!(
+                                        "Move {} playing team to {} ({})",
+                                        player.name.as_deref().unwrap_or("Player"),
+                                        draft.selected_club_name,
+                                        draft.selected_squad.label()
+                                    ),
                                 });
                             }
                         }
                     }
-                }
 
-                player.club_addr = Some(effective_club_addr);
-                player.club_name = Some(effective_club_name);
+                    // 2. Write club pointer (0x03B0 in FM24)
+                    if let Some(off) = schemas.offset_of("p_club_ptr") {
+                        if off + 8 <= player.raw.len() {
+                            let old_bytes = player.raw[off..off + 8].to_vec();
+                            let new_bytes = target_addr.to_le_bytes().to_vec();
+                            if old_bytes != new_bytes {
+                                player.raw[off..off + 8].copy_from_slice(&new_bytes);
+                                edits.push(FieldEdit {
+                                    addr: addr + off as u64,
+                                    old_raw: old_bytes,
+                                    new_raw: new_bytes,
+                                    description: format!(
+                                        "Move {} club to {}{}",
+                                        player.name.as_deref().unwrap_or("Player"),
+                                        draft.selected_club_name,
+                                        if draft.on_loan { " (On Loan)" } else { "" }
+                                    ),
+                                });
+                            }
+                        }
+                    }
+
+                    // 3. Update contract record (at player+0x340 in FM24)
+                    if let (Some(cr), Some(caddr)) = (player.contract_raw.as_mut(), player.contract_addr) {
+                        // Update contract playing team at contract+0x10 for permanent transfers
+                        // NOTE: NEVER modify contract+0x08! In FM, contract+0x08 is contract->person (back-pointer to Player).
+                        // Overwriting contract+0x08 breaks player dereferences during midnight next-day calculations and crashes FM!
+                        if !draft.on_loan && cr.len() >= 0x18 {
+                            let old_team = cr[0x10..0x18].to_vec();
+                            let new_team = team_addr.to_le_bytes().to_vec();
+                            if old_team != new_team {
+                                cr[0x10..0x18].copy_from_slice(&new_team);
+                                edits.push(FieldEdit {
+                                    addr: caddr + 0x10,
+                                    old_raw: old_team,
+                                    new_raw: new_team,
+                                    description: format!("Contract playing team \u{2192} {}", draft.selected_club_name),
+                                });
+                            }
+                        }
+
+                        // Update squad status (contract+0x4C)
+                        if let Some(off) = schemas.offset_of("p_squad_status") {
+                            if off < cr.len() {
+                                let old_status = cr[off];
+                                let new_status = if draft.on_loan {
+                                    24 // Out on loan
+                                } else {
+                                    match draft.selected_squad {
+                                        SquadDestination::Senior => 1, // Star Player / Regular
+                                        SquadDestination::BTeam => 7,  // Fringe Player / Reserves
+                                        SquadDestination::U19 => 11,   // Youngster
+                                    }
+                                };
+                                if new_status != old_status {
+                                    cr[off] = new_status;
+                                    edits.push(FieldEdit {
+                                        addr: caddr + off as u64,
+                                        old_raw: vec![old_status],
+                                        new_raw: vec![new_status],
+                                        description: format!("Squad Status \u{2192} code {new_status}"),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    player.club_addr = Some(target_addr);
+                    player.club_name = Some(draft.selected_club_name.clone());
+                }
             }
 
-            ui.add_space(2.0);
+            ui.add_space(4.0);
             ui.label(
-                egui::RichText::new("💡 Di game FM: ganti tab (misal klik Tactics lalu kembali ke Squad) atau tekan Spasi/Continue untuk me-refresh daftar pemain di squad.")
-                    .weak()
-                    .size(10.5),
+                egui::RichText::new("💡 Tips agar pemain langsung tampil di daftar Squad in-game:")
+                    .strong()
+                    .size(11.0),
+            );
+            ui.label(
+                egui::RichText::new(
+                    "• Buka menu Squad klub tujuan di Football Manager.\n\
+                     • Di pojok kanan atas layar Squad, klik 'Filter' lalu hilangkan centang 'Hide Unavailable' / 'Hide Unregistered' (karena pemain baru pindah belum didaftarkan nomor skuadnya).\n\
+                     • Lanjutkan hari (tekan Space/Continue) untuk me-refresh kalender jadwal pertandingan secara normal."
+                )
+                .weak()
+                .size(10.5),
             );
         }
 
