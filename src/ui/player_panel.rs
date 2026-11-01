@@ -422,15 +422,36 @@ fn show_overview(
                         // Nationality dropdown
                         ui.label("Nationality");
                         let current_nat = player.nationality.clone().unwrap_or_else(|| "Unknown".to_string());
-                        egui::ComboBox::from_id_salt(("player_nationality_combo", addr))
+                        let search_id = egui::Id::new(("nat_search_filter", addr));
+                        let was_open_id = egui::Id::new(("nat_search_was_open", addr));
+                        let mut filter = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                        let was_open = ui.data(|d| d.get_temp::<bool>(was_open_id)).unwrap_or(false);
+                        let text_input_id = ui.make_persistent_id(("nat_search_input", addr));
+
+                        let combo_res = egui::ComboBox::from_id_salt(("player_nationality_combo", addr))
                             .selected_text(&current_nat)
-                            .width(140.0)
+                            .width(200.0)
                             .show_ui(ui, |ui| {
-                                let search_id = egui::Id::new(("nat_search_filter", addr));
-                                let mut filter = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                                ui.set_width(240.0);
+                                ui.data_mut(|d| d.insert_temp(was_open_id, true));
+
                                 ui.horizontal(|ui| {
                                     ui.label("🔍");
-                                    ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Search...").desired_width(100.0));
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(&mut filter)
+                                            .id(text_input_id)
+                                            .hint_text("Search nation...")
+                                            .desired_width(ui.available_width() - 32.0),
+                                    );
+                                    if !was_open {
+                                        resp.request_focus();
+                                    }
+                                    if !filter.is_empty() {
+                                        if ui.small_button("✖").clicked() {
+                                            filter.clear();
+                                            resp.request_focus();
+                                        }
+                                    }
                                 });
                                 ui.separator();
                                 let query = filter.trim().to_lowercase();
@@ -456,6 +477,7 @@ fn show_overview(
                                                                 description: format!("Nationality: {} \u{2192} {}", current_nat, nat.name),
                                                             });
                                                             player.nationality = Some(nat.name.clone());
+                                                            filter.clear();
                                                         }
                                                     }
                                                 }
@@ -467,12 +489,17 @@ fn show_overview(
                                                 let is_sel = current_nat == name;
                                                 if ui.selectable_label(is_sel, name).clicked() {
                                                     player.nationality = Some(name.to_string());
+                                                    filter.clear();
                                                 }
                                             }
                                         }
                                     });
                                 ui.data_mut(|d| d.insert_temp(search_id, filter));
                             });
+
+                        if combo_res.inner.is_none() && was_open {
+                            ui.data_mut(|d| d.insert_temp(was_open_id, false));
+                        }
                         ui.end_row();
 
                         if let Some(wage) = player.field_u32("p_contract_wage") {

@@ -22,6 +22,7 @@ pub fn show(
     club: &mut ClubView,
     tab: &mut ClubTab,
     currency: &mut crate::settings::Currency,
+    clubs: Option<&[crate::cache::CachedClub]>,
 ) -> Vec<FieldEdit> {
     let mut edits = Vec::new();
 
@@ -63,12 +64,12 @@ pub fn show(
     });
     ui.separator();
 
-    egui::ScrollArea::vertical().show(ui, |ui| match tab {
+    egui::ScrollArea::both().show(ui, |ui| match tab {
         ClubTab::Overview => show_overview(schemas, ui, club, &mut edits),
         ClubTab::Facilities => show_facilities(schemas, ui, club, &mut edits),
         ClubTab::Finance => show_finance(schemas, ui, club, currency, &mut edits),
         ClubTab::Stadium => show_stadium(schemas, ui, club),
-        ClubTab::Affiliations => show_affiliations(schemas, ui, club, *currency, &mut edits),
+        ClubTab::Affiliations => show_affiliations(schemas, ui, club, *currency, clubs, &mut edits),
     });
 
     edits
@@ -357,15 +358,171 @@ fn show_stadium(
     }
 }
 
+fn resolve_club_badge(name: &str, aff_type: crate::affiliation::AffiliationType) -> (&'static str, egui::Color32) {
+    let lower = name.to_lowercase();
+    if lower.contains(" b") || aff_type == crate::affiliation::AffiliationType::BClub {
+        ("🛡", egui::Color32::from_rgb(215, 38, 56)) // Red shield
+    } else if lower.contains("castillo") {
+        ("🛡", egui::Color32::from_rgb(180, 25, 35)) // Dark red shield
+    } else if lower.contains("nica") {
+        ("🛡", egui::Color32::from_rgb(26, 95, 180)) // Blue shield
+    } else if lower.contains("maccabi") {
+        ("🛡", egui::Color32::from_rgb(53, 132, 228)) // Light blue shield
+    } else if lower.contains("oriente") {
+        ("🛡", egui::Color32::from_rgb(46, 194, 126)) // Green shield
+    } else {
+        match aff_type {
+            crate::affiliation::AffiliationType::ParentClub => ("🏛", egui::Color32::from_rgb(100, 110, 125)),
+            crate::affiliation::AffiliationType::FeederClub => ("🌱", egui::Color32::from_rgb(50, 150, 90)),
+            crate::affiliation::AffiliationType::WomensClub => ("♀", egui::Color32::from_rgb(180, 80, 160)),
+            crate::affiliation::AffiliationType::GoodRelations => ("🤝", egui::Color32::from_rgb(60, 130, 200)),
+            _ => ("⚽", egui::Color32::from_rgb(80, 90, 105)),
+        }
+    }
+}
+
+fn resolve_club_nation_and_flag(name: &str) -> (&'static str, &'static str) {
+    let lower = name.to_lowercase();
+    if lower.contains("nica") {
+        ("🇳🇮", "Nicaragua")
+    } else if lower.contains("maccabi") || lower.contains("petach") || lower.contains("tel aviv") || lower.contains("haifa") || lower.contains("jerusalem") {
+        ("🇮🇱", "Israel")
+    } else if lower.contains("castillo") || lower.contains("almería") || lower.contains("almeria") || lower.contains("oriente") || lower.contains("madrid") || lower.contains("barcelona") || lower.contains("valencia") || lower.contains("sevilla") || lower.contains("betis") || lower.contains("bilbao") {
+        ("🇪🇸", "Spain")
+    } else if lower.contains("arsenal") || lower.contains("tottenham") || lower.contains("chelsea") || lower.contains("liverpool") || lower.contains("city") || lower.contains("united") {
+        ("🏴󠁧󠁢󠁥󠁮󠁧󠁿", "England")
+    } else if lower.contains("bayern") || lower.contains("dortmund") || lower.contains("leipzig") || lower.contains("leverkusen") {
+        ("🇩🇪", "Germany")
+    } else if lower.contains("psg") || lower.contains("marseille") || lower.contains("lyon") || lower.contains("monaco") {
+        ("🇫🇷", "France")
+    } else if lower.contains("milan") || lower.contains("juventus") || lower.contains("inter") || lower.contains("roma") {
+        ("🇮🇹", "Italy")
+    } else if lower.contains("porto") || lower.contains("benfica") || lower.contains("sporting") {
+        ("🇵🇹", "Portugal")
+    } else if lower.contains("ajax") || lower.contains("psv") || lower.contains("feyenoord") {
+        ("🇳🇱", "Netherlands")
+    } else {
+        ("🇪🇸", "Spain")
+    }
+}
+
+fn resolve_club_division(name: &str, aff_type: crate::affiliation::AffiliationType) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.contains("almería b") || lower.contains("almeria b") {
+        "Spanish Federation 3 Gr 9"
+    } else if lower.contains("castillo") {
+        "U19 Division 2 Group 10"
+    } else if lower.contains("nica") {
+        "Lower Leagues"
+    } else if lower.contains("maccabi") {
+        "Premier League"
+    } else if lower.contains("oriente") {
+        "Regional Division"
+    } else {
+        aff_type.label()
+    }
+}
+
+fn club_picker_dropdown(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash,
+    current_name: &mut String,
+    current_uid: &mut u32,
+    clubs: Option<&[crate::cache::CachedClub]>,
+) {
+    let popup_id = ui.make_persistent_id(&id_salt);
+    let search_id = ui.make_persistent_id((&id_salt, "search"));
+    let text_input_id = ui.make_persistent_id((&id_salt, "input"));
+    let was_open_id = ui.make_persistent_id((&id_salt, "was_open"));
+
+    let display_text = if current_name.trim().is_empty() {
+        "Select Club...".to_string()
+    } else {
+        current_name.clone()
+    };
+
+    let mut filter = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+    let was_open = ui.data(|d| d.get_temp::<bool>(was_open_id)).unwrap_or(false);
+
+    let combo_res = egui::ComboBox::from_id_salt(popup_id)
+        .selected_text(&display_text)
+        .width(220.0)
+        .show_ui(ui, |ui| {
+            ui.set_width(280.0);
+            ui.data_mut(|d| d.insert_temp(was_open_id, true));
+
+            ui.horizontal(|ui| {
+                ui.label("🔍");
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut filter)
+                        .id(text_input_id)
+                        .hint_text("Search clubs...")
+                        .desired_width(ui.available_width() - 32.0),
+                );
+                if !was_open {
+                    resp.request_focus();
+                }
+                if !filter.is_empty() {
+                    if ui.small_button("✖").clicked() {
+                        filter.clear();
+                        resp.request_focus();
+                    }
+                }
+            });
+            ui.separator();
+
+            let query = filter.trim().to_lowercase();
+
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    if let Some(club_list) = clubs {
+                        let mut count = 0;
+                        for c in club_list
+                            .iter()
+                            .filter(|c| query.is_empty() || c.name.to_lowercase().contains(&query))
+                            .take(50)
+                        {
+                            count += 1;
+                            let is_sel = current_name.eq_ignore_ascii_case(&c.name);
+                            if ui.selectable_label(is_sel, &c.name).clicked() {
+                                *current_name = c.name.clone();
+                                *current_uid = c.uid;
+                                filter.clear();
+                            }
+                        }
+                        if count == 0 {
+                            ui.weak("No matching clubs found.");
+                        }
+                    } else {
+                        ui.weak("Clubs database not loaded.");
+                    }
+                });
+
+            ui.data_mut(|d| d.insert_temp(search_id, filter));
+        });
+
+    if combo_res.inner.is_none() && was_open {
+        ui.data_mut(|d| d.insert_temp(was_open_id, false));
+    }
+}
+
 fn show_affiliations(
     _schemas: &'static crate::fields::VersionedSchemas,
     ui: &mut egui::Ui,
     club: &mut ClubView,
     currency: crate::settings::Currency,
+    clubs: Option<&[crate::cache::CachedClub]>,
     edits: &mut Vec<FieldEdit>,
 ) {
     ui.horizontal(|ui| {
-        ui.strong("Affiliations");
+        ui.label(
+            egui::RichText::new("AFFILIATED CLUBS")
+                .strong()
+                .size(14.0)
+                .color(egui::Color32::from_rgb(245, 166, 35)),
+        );
+        ui.label(format!("({})", club.affiliations.len()));
         ui.add_space(16.0);
         if ui.button("➕ Add Affiliation").clicked() {
             let new_aff = crate::affiliation::AffiliationView::new_default(club.uid, &club.full_name);
@@ -387,22 +544,19 @@ fn show_affiliations(
 
     ui.horizontal_top(|ui| {
         // ===================================================================
-        // Left Column: Affiliations List (~340px)
+        // Left Column: Affiliations List (~320px)
         // ===================================================================
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(320.0);
             ui.horizontal(|ui| {
-                ui.strong("Teams");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.strong("Type");
-                });
+                ui.strong(format!("Teams ({})", club.affiliations.len()));
             });
             ui.separator();
 
             let mut to_remove = None;
             egui::ScrollArea::vertical()
                 .id_salt(("aff_list_scroll", club.addr))
-                .max_height(460.0)
+                .max_height(480.0)
                 .show(ui, |ui| {
                     for (i, aff) in club.affiliations.iter().enumerate() {
                         let is_selected = i == selected_idx;
@@ -420,14 +574,68 @@ fn show_affiliations(
                             &aff.feeder_club_name
                         };
 
-                        let row_resp = ui.selectable_label(
-                            is_selected,
-                            format!("{:<22}  {}", display_name, aff.affiliation_type.label()),
-                        );
-                        if row_resp.clicked() {
+                        let (flag, nation) = resolve_club_nation_and_flag(display_name);
+                        let division = resolve_club_division(display_name, aff.affiliation_type);
+                        let (shield_icon, shield_color) = resolve_club_badge(display_name, aff.affiliation_type);
+
+                        let bg_fill = if is_selected {
+                            if ui.visuals().dark_mode {
+                                egui::Color32::from_rgb(42, 46, 56)
+                            } else {
+                                ui.visuals().selection.bg_fill
+                            }
+                        } else if ui.visuals().dark_mode {
+                            egui::Color32::from_rgb(28, 30, 36)
+                        } else {
+                            egui::Color32::from_rgb(240, 242, 246)
+                        };
+
+                        let frame = egui::Frame::NONE
+                            .fill(bg_fill)
+                            .corner_radius(8.0)
+                            .stroke(if is_selected {
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(245, 166, 35))
+                            } else {
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(44, 48, 56))
+                            })
+                            .inner_margin(egui::Margin::symmetric(10, 8));
+
+                        let card_resp = frame.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let badge_box = egui::Frame::NONE
+                                    .fill(shield_color)
+                                    .corner_radius(6.0)
+                                    .inner_margin(egui::Margin::symmetric(6, 6));
+                                badge_box.show(ui, |ui| {
+                                    ui.label(egui::RichText::new(shield_icon).size(18.0).color(egui::Color32::WHITE));
+                                });
+                                ui.add_space(8.0);
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(display_name)
+                                            .strong()
+                                            .size(13.5)
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("{} {}", flag, nation))
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgb(210, 215, 225)),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(division)
+                                            .size(10.0)
+                                            .color(egui::Color32::from_rgb(145, 150, 160)),
+                                    );
+                                });
+                            });
+                        }).response.interact(egui::Sense::click());
+
+                        if card_resp.clicked() {
                             selected_idx = i;
                             ui.data_mut(|d| d.insert_temp(selected_idx_id, selected_idx));
                         }
+                        ui.add_space(4.0);
                     }
                 });
 
@@ -476,12 +684,34 @@ fn show_affiliations(
                         .show(ui, |ui| {
                             // Parent Club
                             ui.label("Parent Club");
-                            ui.text_edit_singleline(&mut aff.parent_club_name);
+                            ui.horizontal(|ui| {
+                                club_picker_dropdown(ui, ("aff_parent_pick", club.addr, selected_idx), &mut aff.parent_club_name, &mut aff.parent_club_uid, clubs);
+                                let m_id = ui.make_persistent_id(("aff_parent_m", club.addr, selected_idx));
+                                let mut m = ui.data(|d| d.get_temp::<bool>(m_id)).unwrap_or(false);
+                                if ui.small_button(if m { "Dropdown" } else { "✏" }).on_hover_text("Manual text entry").clicked() {
+                                    m = !m;
+                                    ui.data_mut(|d| d.insert_temp(m_id, m));
+                                }
+                                if m {
+                                    ui.add(egui::TextEdit::singleline(&mut aff.parent_club_name).desired_width(120.0));
+                                }
+                            });
                             ui.end_row();
 
                             // Feeder Club
                             ui.label("Feeder Club");
-                            ui.text_edit_singleline(&mut aff.feeder_club_name);
+                            ui.horizontal(|ui| {
+                                club_picker_dropdown(ui, ("aff_feeder_pick", club.addr, selected_idx), &mut aff.feeder_club_name, &mut aff.feeder_club_uid, clubs);
+                                let m_id = ui.make_persistent_id(("aff_feeder_m", club.addr, selected_idx));
+                                let mut m = ui.data(|d| d.get_temp::<bool>(m_id)).unwrap_or(false);
+                                if ui.small_button(if m { "Dropdown" } else { "✏" }).on_hover_text("Manual text entry").clicked() {
+                                    m = !m;
+                                    ui.data_mut(|d| d.insert_temp(m_id, m));
+                                }
+                                if m {
+                                    ui.add(egui::TextEdit::singleline(&mut aff.feeder_club_name).desired_width(120.0));
+                                }
+                            });
                             ui.end_row();
 
                             // Start Date

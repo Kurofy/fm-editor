@@ -223,29 +223,34 @@ fn load_club_affiliations(
         if !(ptr > 0x10000 && ptr < 0x7FFFFFFFFFFF) {
             return None;
         }
-        // Direct memory read of club: UID at +0x0C, name at +0xC0 or +0xC8
-        if let Ok(uid) = fm.read_u32(ptr + 0x0C) {
-            let np_res = fm.read_u64(ptr + 0xC0).or_else(|_| fm.read_u64(ptr + 0xC8));
-            if let Ok(name_ptr) = np_res {
-                if let Ok(name) = fm.read_fm_name(name_ptr) {
-                    if !name.trim().is_empty() {
-                        return Some((name, uid, ptr));
-                    }
+
+        let read_club_at = |c_ptr: u64| -> Option<(String, u32, u64)> {
+            let uid = fm.read_u32(c_ptr + 0x0C).unwrap_or(0);
+            // Try short_name at +0xC8 first, then full_name at +0xC0
+            let s_ptr = fm.read_u64(c_ptr + 0xC8).unwrap_or(0);
+            if let Ok(name) = fm.read_fm_name(s_ptr) {
+                if !name.trim().is_empty() {
+                    return Some((name, uid, c_ptr));
                 }
             }
+            let f_ptr = fm.read_u64(c_ptr + 0xC0).unwrap_or(0);
+            if let Ok(name) = fm.read_fm_name(f_ptr) {
+                if !name.trim().is_empty() {
+                    return Some((name, uid, c_ptr));
+                }
+            }
+            None
+        };
+
+        if let Some(res) = read_club_at(ptr) {
+            return Some(res);
         }
+
         // Fallback: team+0x30
         if let Ok(cptr) = fm.read_u64(ptr + 0x30) {
             if cptr > 0x10000 && cptr < 0x7FFFFFFFFFFF && cptr != ptr {
-                if let Ok(uid) = fm.read_u32(cptr + 0x0C) {
-                    let np_res = fm.read_u64(cptr + 0xC0).or_else(|_| fm.read_u64(cptr + 0xC8));
-                    if let Ok(name_ptr) = np_res {
-                        if let Ok(name) = fm.read_fm_name(name_ptr) {
-                            if !name.trim().is_empty() {
-                                return Some((name, uid, cptr));
-                            }
-                        }
-                    }
+                if let Some(res) = read_club_at(cptr) {
+                    return Some(res);
                 }
             }
         }
@@ -253,11 +258,21 @@ fn load_club_affiliations(
     };
 
     // Vector scan ranges:
-    // 1. Club struct vectors: check every 8-byte boundary from 0x18 to 0x160
-    // 2. Info struct vectors: check every 8-byte boundary from 0x00 to 0x130
-    let mut vec_bases = vec![(club_addr, 0x18u64..0x160u64)];
+    // 1. Club struct vectors: check every 8-byte boundary from 0x18 to 0x170
+    // 2. Info struct vectors: check every 8-byte boundary from 0x00 to 0x138
+    // 3. Senior team struct vectors: check every 8-byte boundary from 0x10 to 0x100
+    let mut vec_bases = vec![(club_addr, 0x18u64..0x170u64)];
     if let Some(ia) = info_addr {
-        vec_bases.push((ia, 0x00u64..0x130u64));
+        vec_bases.push((ia, 0x00u64..0x138u64));
+    }
+    if let Ok(teams_ptr) = fm.read_u64(club_addr + 0x18) {
+        if teams_ptr > 0x10000 && teams_ptr < 0x7FFFFFFFFFFF {
+            if let Ok(st) = fm.read_u64(teams_ptr) {
+                if st > 0x10000 && st < 0x7FFFFFFFFFFF {
+                    vec_bases.push((st, 0x10u64..0x100u64));
+                }
+            }
+        }
     }
 
     for (base, range) in vec_bases {
@@ -343,11 +358,11 @@ fn load_club_affiliations(
                     }
                 }
 
-                // Try Affiliation composite record (reads up to 64 bytes)
-                let Ok(raw) = fm.read_bytes(item_ptr, 0x40) else { continue };
-                // Scan any 8-byte pointer in the first 0x28 bytes of raw
+                // Try Affiliation composite record (reads up to 128 bytes)
+                let Ok(raw) = fm.read_bytes(item_ptr, 0x80) else { continue };
+                // Scan any 8-byte pointer in the first 0x40 bytes of raw
                 let mut found_other = None;
-                for p_off in (0..0x28).step_by(8) {
+                for p_off in (0..0x40).step_by(8) {
                     if p_off + 8 <= raw.len() {
                         let candidate_ptr = u64::from_le_bytes(raw[p_off..p_off + 8].try_into().unwrap());
                         if let Some((other_name, other_uid, other_addr)) = resolve_club(candidate_ptr) {

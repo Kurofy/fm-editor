@@ -1384,12 +1384,14 @@ impl eframe::App for FmEditorApp {
                             EntityTabType::Club => {
                                 if let Some(c) = self.selected_club.as_mut().filter(|c| c.addr == tab_addr) {
                                     let prev_curr = self.settings.currency;
+                                    let clubs = self.entity_cache.as_deref().map(|c| c.clubs.as_slice());
                                     let e = club_panel::show(
                                         schemas,
                                         ui,
                                         c,
                                         &mut self.club_tab,
                                         &mut self.settings.currency,
+                                        clubs,
                                     );
                                     if self.settings.currency != prev_curr {
                                         self.settings.save();
